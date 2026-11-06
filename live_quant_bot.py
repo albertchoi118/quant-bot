@@ -32,7 +32,7 @@ finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 def get_sp500_tickers():
     try:
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        tables = pd.read_html(url)
+        tables = pd.read_html(url, flavor='bs4')
         return tables[0]['Symbol'].str.replace('.', '-').tolist()
     except Exception as e:
         print(f"Error fetching S&P 500: {e}")
@@ -41,7 +41,7 @@ def get_sp500_tickers():
 def get_nasdaq100_tickers():
     try:
         url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-        tables = pd.read_html(url)
+        tables = pd.read_html(url, flavor='bs4')
         for table in tables:
             if 'Ticker' in table.columns or 'Symbol' in table.columns:
                 col = 'Ticker' if 'Ticker' in table.columns else 'Symbol'
