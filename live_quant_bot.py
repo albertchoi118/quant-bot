@@ -122,10 +122,9 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 # ==========================================
 def run_quant_scanner():
     if not is_market_open():
-        log("⏸️ Market is CLOSED. Skipping scan.")
-        sys.exit(0)
-
-    log("🚀 Market is OPEN. Initializing High-Speed Quant Scan...")
+        log("⏸️ Market is currently CLOSED. Proceeding with scan using latest available daily bars...")
+    else:
+        log("🚀 Market is OPEN. Initializing High-Speed Quant Scan...")
     
     # Load already active/open tickers from CSV to prevent duplicate signals
     open_tickers = set()
@@ -177,7 +176,7 @@ def run_quant_scanner():
                 sl_price = round(price * (1 - STOP_LOSS_PCT), 2)
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                log(f"🎯 BUY SIGNAL GENERATED: {ticker} @ ${price:.2f} | RSI: {rsi:.1f} | TP: ${tp_price} | SL: ${sl_price}")
+                log(f"🎯 BUY SIGNAL GENERATED: {ticker} @ ${price:.2f} | RSI: {rsi:.1f} | TP: ${tp_price} \vert{} SL:${sl_price}")
 
                 alert_msg = (
                     f"🚨 *QUANT BUY ALERT* 🚨\n\n"
@@ -207,7 +206,7 @@ def run_quant_scanner():
                     "Exit_Date": np.nan
                 })
             else:
-                log(f"🔍 {ticker} | Price: ${price:.2f} | RSI: {rsi:.1f} (Req < 40: {rsi_ok}) | SMA200: ${sma200:.2f} | Trend OK: {trend_ok} -> NO BUY")
+                log(f"🔍 {ticker} | Price: ${price:.2f} \vert{} RSI: {rsi:.1f} (Req < 40: {rsi_ok}) \vert{} SMA200:${sma200:.2f} | Trend OK: {trend_ok} -> NO BUY")
 
         except Exception as e:
             log(f"⚠️ Error processing {ticker}: {e}")
@@ -223,7 +222,3 @@ def run_quant_scanner():
             new_df.to_csv(CSV_FILE, index=False)
         log(f"✅ Successfully appended {len(signals_found)} new signals to {CSV_FILE}.")
     else:
-        log("🏁 Scan complete. Zero new unique signals triggered during this cycle.")
-
-if __name__ == "__main__":
-    run_quant_scanner()
