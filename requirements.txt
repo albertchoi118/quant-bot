@@ -1,5 +1,8 @@
+streamlit
 pandas
+yfinance
 ta
 finnhub-python
 alpaca-trade-api
 requests
+beautifulsoup4
