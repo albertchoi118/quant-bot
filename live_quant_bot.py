@@ -22,7 +22,7 @@ vader_analyzer = SentimentIntensityAnalyzer()
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
 
 # ==========================================
-# 1. UNIVERSE FETCHERS
+# 1. UNIVERSE FETCHERS (S&P 500 & NASDAQ-100)
 # ==========================================
 def get_sp500_tickers():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -46,9 +46,6 @@ def get_nasdaq100_tickers():
         raise ValueError("Could not find Nasdaq-100 table.")
     return [row.find_all(['td', 'th'])[0].text.strip().replace('.', '-') for row in tables[0].find_all('tr')[1:] if row.find_all(['td', 'th']) and len(row.find_all(['td', 'th'])[0].text.strip()) <= 6]
 
-def get_penny_stocks():
-    return ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
-
 # ==========================================
 # 2. TELEGRAM & LOGGING SYSTEMS
 # ==========================================
@@ -56,7 +53,10 @@ def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=5)
+    try:
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=5)
+    except Exception as e:
+        print(f"⚠️ Telegram Alert Error: {e}")
 
 def is_recent_signal(ticker, hours=24):
     file_path = "backtest_signals.csv"
@@ -94,11 +94,10 @@ def log_signal_to_csv(result):
         ])
 
 # ==========================================
-# 3. QUANT & SENTIMENT ENGINE (USING YFINANCE)
+# 3. QUANT & SENTIMENT ENGINE (CLEAN YFINANCE)
 # ==========================================
 def fetch_live_bars(ticker):
     try:
-        # Download 10 days of hourly data to safely cover SMA 50 and ATR requirements
         df = yf.download(ticker, period="10d", interval="1h", progress=False)
         if df is None or df.empty or len(df) < 20:
             return None
@@ -179,16 +178,15 @@ def run_quant_analysis(ticker):
     return None
 
 # ==========================================
-# MAIN RUNNER
+# MAIN RUNNER (HIGH SPEED, REAL-TIME ALERTS)
 # ==========================================
 def main():
-    print("🚀 Initializing High-Speed Quant Scan (YFinance Engine)...")
+    print("🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...")
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
-    penny_list = get_penny_stocks()
     
-    universe = list(set(sp500_list) | set(nasdaq_list) | set(penny_list))
+    universe = list(set(sp500_list) | set(nasdaq_list))
     print(f"Tracking {len(universe)} tickers. Running full-speed scan...")
     
     signals_found = 0
@@ -198,9 +196,7 @@ def main():
             
         result = run_quant_analysis(ticker)
         if result:
-            if ticker in set(penny_list):
-                result["exchange"] = "Penny / OTC"
-            elif ticker in set(nasdaq_list):
+            if ticker in set(nasdaq_list):
                 result["exchange"] = "NASDAQ-100"
             else:
                 result["exchange"] = "S&P 500"
@@ -214,6 +210,7 @@ def main():
                 f"*Take Profit:* `${result['take_profit']:.2f}`\n"
                 f"*Conviction:* `{result['conviction']}%`"
             )
+            # Real-time dispatch and immediate logging
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
