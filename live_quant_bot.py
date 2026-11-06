@@ -178,19 +178,22 @@ def run_quant_analysis(ticker):
     return None
 
 # ==========================================
-# MAIN RUNNER (HIGH SPEED, REAL-TIME ALERTS)
+# MAIN RUNNER (WITH LIVE PROGRESS LOGS)
 # ==========================================
 def main():
-    print("🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...")
+    print("🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...", flush=True)
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
     
-    universe = list(set(sp500_list) | set(nasdaq_list))
-    print(f"Tracking {len(universe)} tickers. Running full-speed scan...")
+    universe = sorted(list(set(sp500_list) | set(nasdaq_list)))
+    total_tickers = len(universe)
+    print(f"📊 Tracking {total_tickers} unique tickers. Starting scan...", flush=True)
     
     signals_found = 0
-    for ticker in universe:
+    for idx, ticker in enumerate(universe, 1):
+        print(f"[{idx}/{total_tickers}] Scanning {ticker}...", flush=True)
+        
         if is_recent_signal(ticker, hours=24):
             continue
             
@@ -210,12 +213,12 @@ def main():
                 f"*Take Profit:* `${result['take_profit']:.2f}`\n"
                 f"*Conviction:* `{result['conviction']}%`"
             )
-            # Real-time dispatch and immediate logging
+            print(f"🎯 SIGNAL FOUND FOR {ticker}! Sending alert & logging...", flush=True)
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
         
-    print(f"Scan complete. Found {signals_found} new actionable signals.")
+    print(f"✅ Scan complete. Found {signals_found} new actionable signals.", flush=True)
 
 if __name__ == "__main__":
     main()
