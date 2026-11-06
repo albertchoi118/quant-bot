@@ -2,8 +2,8 @@ name: Quant Bot 15-Min Scanner
 
 on:
   schedule:
-    # Runs every 15 minutes
-    - cron: '*/15 * * * *'
+    # Runs every 15 minutes (with a slight offset to reduce queue delays)
+    - cron: '5,20,35,50 * * * *'
   workflow_dispatch: # Allows manual testing from the GitHub Actions tab
 
 permissions:
@@ -23,8 +23,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pandas ta finnhub-python alpaca-trade-api requests beautifulsoup4
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run Quant Bot Script
         env:
