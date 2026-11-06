@@ -90,7 +90,7 @@ def evaluate_trade_outcomes(signal_df):
             else:
                 status = "Active / Open"
                 exit_price = None
-                return_pct = ((current_price - entry_price) / entry_price) * 100
+                return_pct = ((exit_price - entry_price) / entry_price) * 100
         else:
             hit_found = False
             for _, bar in bars.iterrows():
@@ -183,7 +183,7 @@ col6.metric("Avg Return", f"{avg_return:+.2f}%")
 st.markdown("---")
 
 # ==========================================
-# POLISHED INTERACTIVE EQUITY CURVE CHART
+# POLISHED COMPOUNDED EQUITY CURVE CHART
 # ==========================================
 st.subheader("📊 Strategy Cumulative Equity Curve")
 
@@ -193,7 +193,9 @@ chart_df["Date"] = pd.to_datetime(chart_df["Timestamp"]).dt.date
 if not chart_df.empty:
     daily_perf = chart_df.groupby("Date")["Return_Pct"].mean().reset_index()
     daily_perf = daily_perf.sort_values("Date")
-    daily_perf["Cumulative_Return"] = daily_perf["Return_Pct"].cumsum()
+    
+    # Correct financial compounding: (1 + r1) * (1 + r2) ... - 1
+    daily_perf["Cumulative_Return"] = ((1 + daily_perf["Return_Pct"] / 100).cumprod() - 1) * 100
 
     fig = go.Figure()
     
