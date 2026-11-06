@@ -3,9 +3,9 @@ import csv
 from pathlib import Path
 import requests
 import pandas as pd
+import yfinance as yf
 import ta
 import finnhub
-import alpaca_trade_api as alpaca
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -13,18 +13,13 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 # ==========================================
 # CONFIGURATION & ENVIRONMENT VARIABLES
 # ==========================================
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
-
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Initialize API & Sentiment Clients
-api = alpaca.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
-finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
+# Initialize Sentiment Client
 vader_analyzer = SentimentIntensityAnalyzer()
+finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
 
 # ==========================================
 # 1. UNIVERSE FETCHERS
@@ -99,24 +94,33 @@ def log_signal_to_csv(result):
         ])
 
 # ==========================================
-# 3. QUANT & SENTIMENT ENGINE (WITH LOUD ERRORS)
+# 3. QUANT & SENTIMENT ENGINE (USING YFINANCE)
 # ==========================================
 def fetch_live_bars(ticker):
     try:
-        bars = api.get_bars(ticker, alpaca.TimeFrame.Hour, limit=50).df
-        return bars if not bars.empty and len(bars) >= 20 else None
+        # Download 10 days of hourly data to safely cover SMA 50 and ATR requirements
+        df = yf.download(ticker, period="10d", interval="1h", progress=False)
+        if df is None or df.empty or len(df) < 20:
+            return None
+        
+        # Flatten multi-index columns if present in newer yfinance releases
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df.columns = [c.lower() for c in df.columns]
+        
+        required = ['open', 'high', 'low', 'close', 'volume']
+        if not all(col in df.columns for col in required):
+            return None
+            
+        return df
     except Exception as e:
-        err_msg = str(e)
-        if "429" in err_msg or "rate limit" in err_msg.lower():
-            print(f"🚨 RATE LIMIT BLOCKED (429) on Alpaca for ticker {ticker}: {err_msg}")
-        elif "403" in err_msg or "unauthorized" in err_msg.lower():
-            print(f"❌ AUTHENTICATION ERROR (403) for ticker {ticker}: Check API Keys! {err_msg}")
-        else:
-            # Print unusual errors so it's never silent
-            print(f"⚠️ API Error fetching bars for {ticker}: {err_msg}")
+        print(f"⚠️ Yahoo Finance Error fetching bars for {ticker}: {e}")
         return None
 
 def analyze_news_sentiment(ticker):
+    if not finnhub_client:
+        return 0.50
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         news = finnhub_client.company_news(ticker, _from=today, to=today)
@@ -175,10 +179,10 @@ def run_quant_analysis(ticker):
     return None
 
 # ==========================================
-# MAIN RUNNER (FAST, NO SLEEP)
+# MAIN RUNNER
 # ==========================================
 def main():
-    print("🚀 Initializing High-Speed Quant Scan (No Sleep, Explicit Error Logging)...")
+    print("🚀 Initializing High-Speed Quant Scan (YFinance Engine)...")
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
