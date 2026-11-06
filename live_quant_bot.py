@@ -8,6 +8,7 @@ import finnhub
 import alpaca_trade_api as alpaca
 from datetime import datetime
 from bs4 import BeautifulSoup
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # ==========================================
 # CONFIGURATION & ENVIRONMENT VARIABLES
@@ -20,9 +21,10 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Initialize API Clients
+# Initialize API & Sentiment Clients
 api = alpaca.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
+vader_analyzer = SentimentIntensityAnalyzer()
 
 # ==========================================
 # 1. UNIVERSE FETCHERS (Direct BeautifulSoup)
@@ -81,7 +83,7 @@ def log_signal_to_csv(result):
         ])
 
 # ==========================================
-# 3. LIVE DATA & QUANT ANALYSIS ENGINE
+# 3. LIVE DATA & ADVANCED VADER SENTIMENT ENGINE
 # ==========================================
 def fetch_live_bars(ticker):
     try:
@@ -95,13 +97,28 @@ def analyze_news_sentiment(ticker):
         today = datetime.now().strftime('%Y-%m-%d')
         news = finnhub_client.company_news(ticker, _from=today, to=today)
         if not news:
+            return 0.50  # Neutral baseline if no news today
+        
+        compound_scores = []
+        for item in news[:5]: # Evaluate top 5 recent news items
+            headline = item.get('headline', '')
+            summary = item.get('summary', '')
+            text = f"{headline} {summary}"
+            
+            if text.strip():
+                scores = vader_analyzer.polarity_scores(text)
+                compound_scores.append(scores['compound'])
+        
+        if not compound_scores:
             return 0.50
-        bullish_keywords = ["upgrade", "approval", "earnings", "contract", "record", "growth", "fda", "patent"]
-        score = 0.50
-        for item in news[:5]:
-            if any(w in item.get('headline', '').lower() for w in bullish_keywords):
-                score += 0.10
-        return min(0.95, score)
+            
+        # Average the VADER compound scores (-1.0 to 1.0)
+        avg_compound = sum(compound_scores) / len(compound_scores)
+        
+        # Map compound score (-1.0 to 1.0) to bot's NLP scale (0.50 to 0.95)
+        # Negative news gets dampened to 0.50, positive news scales linearly up to 0.95
+        normalized_score = 0.50 + (max(0.0, avg_compound) * 0.45)
+        return round(max(0.50, min(0.95, normalized_score)), 2)
     except Exception:
         return 0.50
 
@@ -115,10 +132,13 @@ def run_quant_analysis(ticker):
     sma_20 = float(ta.trend.SMAIndicator(close=close, window=20).sma_indicator().iloc[-1])
     sma_50 = float(ta.trend.SMAIndicator(close=close, window=50).sma_indicator().iloc[-1])
 
+    # Core Strategy: Oversold dip in a macro uptrend
     if rsi < 35 and current_price > sma_20 and sma_20 > sma_50:
         nlp_score = analyze_news_sentiment(ticker)
         tech_score = (100 - rsi) / 100.0
         conviction = int(((tech_score * 0.5) + (nlp_score * 0.5)) * 100)
+        
+        # Must pass high conviction threshold
         if conviction >= 78:
             return {
                 "ticker": ticker, "price": current_price, "rsi": round(rsi, 1),
@@ -131,7 +151,7 @@ def run_quant_analysis(ticker):
 # MAIN RUNNER
 # ==========================================
 def main():
-    print("🚀 Initializing Fast Live Quant Bot Scan...")
+    print("🚀 Initializing Fast Live Quant Bot Scan with VADER NLP...")
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
@@ -148,7 +168,6 @@ def main():
     for ticker in universe:
         result = run_quant_analysis(ticker)
         if result:
-            # Determine exchange/universe category
             if ticker in penny_set:
                 result["exchange"] = "Penny / OTC"
             elif ticker in nasdaq_set:
@@ -156,7 +175,7 @@ def main():
             else:
                 result["exchange"] = "S&P 500"
                 
-            msg = f"🚨 *HIGH-CONVICTION BUY* 🚨\n\n*Ticker:* `{result['ticker']}`\n*Exchange:* `{result['exchange']}`\n*Price:* `${result['price']:.2f}`\n*Conviction:* `{result['conviction']}%`"
+            msg = f"🚨 *HIGH-CONVICTION BUY* 🚨\n\n*Ticker:* `{result['ticker']}`\n*Exchange:* `{result['exchange']}`\n*Price:* `${result['price']:.2f}`\n*NLP Score:* `{result['nlp']}`\n*Conviction:* `{result['conviction']}%`"
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
