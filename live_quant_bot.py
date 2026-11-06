@@ -133,7 +133,7 @@ def run_quant_scanner():
         try:
             existing_df = pd.read_csv(CSV_FILE)
             if 'Ticker' in existing_df.columns and 'Status' in existing_df.columns:
-                open_mask = existing_df['Status'].astype(str).str.upper() == 'OPEN'
+                open_mask = existing_df['Status'].astype(str).str.upper().str.contains("OPEN|ACTIVE")
                 open_tickers = set(existing_df.loc[open_mask, 'Ticker'].unique())
             log(f"📋 Loaded {len(open_tickers)} active OPEN positions from {CSV_FILE} for deduplication.")
         except Exception as e:
@@ -191,22 +191,17 @@ def run_quant_scanner():
                 )
                 send_telegram_alert(alert_msg)
 
-                # Match original CSV schema columns exactly:
-                # Timestamp,Ticker,Exchange,Price,RSI,NLP_Score,Conviction,Stop_Loss,Take_Profit,Date,Signal,Entry_Price,SMA200,Status,Exit_Price,Exit_Date
+                # Clean, non-redundant signal schema matching app.py
                 signals_found.append({
                     "Timestamp": timestamp_str,
                     "Ticker": ticker,
                     "Exchange": "S&P/Nasdaq",
                     "Price": round(price, 2),
                     "RSI": round(rsi, 2),
-                    "NLP_Score": np.nan,
-                    "Conviction": np.nan,
+                    "SMA200": round(sma200, 2),
                     "Stop_Loss": sl_price,
                     "Take_Profit": tp_price,
-                    "Date": timestamp_str,
                     "Signal": "BUY",
-                    "Entry_Price": round(price, 2),
-                    "SMA200": round(sma200, 2),
                     "Status": "OPEN",
                     "Exit_Price": np.nan,
                     "Exit_Date": np.nan
