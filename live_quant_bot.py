@@ -1,5 +1,4 @@
 import os
-import time
 import csv
 from pathlib import Path
 import requests
@@ -68,8 +67,18 @@ def log_signal_to_csv(result):
     with open(file_path, mode="a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["Timestamp", "Ticker", "Price", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["ticker"], result["price"], result["rsi"], result["nlp"], result["conviction"], result["stop_loss"], result["take_profit"]])
+            writer.writerow(["Timestamp", "Ticker", "Exchange", "Price", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"])
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+            result["ticker"], 
+            result["exchange"],
+            result["price"], 
+            result["rsi"], 
+            result["nlp"], 
+            result["conviction"], 
+            result["stop_loss"], 
+            result["take_profit"]
+        ])
 
 # ==========================================
 # 3. LIVE DATA & QUANT ANALYSIS ENGINE
@@ -123,18 +132,34 @@ def run_quant_analysis(ticker):
 # ==========================================
 def main():
     print("🚀 Initializing Fast Live Quant Bot Scan...")
-    universe = list(set(get_sp500_tickers() + get_nasdaq100_tickers() + get_penny_stocks()))
-    print(f"Tracking {len(universe)} tickers at maximum speed.")
+    
+    sp500_list = get_sp500_tickers()
+    nasdaq_list = get_nasdaq100_tickers()
+    penny_list = get_penny_stocks()
+    
+    sp500_set = set(sp500_list)
+    nasdaq_set = set(nasdaq_list)
+    penny_set = set(penny_list)
+    
+    universe = list(sp500_set | nasdaq_set | penny_set)
+    print(f"Tracking {len(universe)} unique tickers across S&P 500, Nasdaq-100, and Penny Stocks.")
     
     signals_found = 0
     for ticker in universe:
         result = run_quant_analysis(ticker)
         if result:
-            msg = f"🚨 *HIGH-CONVICTION BUY* 🚨\n\n*Ticker:* `{result['ticker']}`\n*Price:* `${result['price']:.2f}`\n*Conviction:* `{result['conviction']}%`"
+            # Determine exchange/universe category
+            if ticker in penny_set:
+                result["exchange"] = "Penny / OTC"
+            elif ticker in nasdaq_set:
+                result["exchange"] = "NASDAQ-100"
+            else:
+                result["exchange"] = "S&P 500"
+                
+            msg = f"🚨 *HIGH-CONVICTION BUY* 🚨\n\n*Ticker:* `{result['ticker']}`\n*Exchange:* `{result['exchange']}`\n*Price:* `${result['price']:.2f}`\n*Conviction:* `{result['conviction']}%`"
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
-        # ❌ Sleep removed entirely! Client handles pacing automatically.
         
     print(f"Scan complete. Found {signals_found} signals.")
 
