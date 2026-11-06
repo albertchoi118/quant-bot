@@ -33,7 +33,15 @@ def get_sp500_tickers():
     table = soup.find('table', {'id': 'constituents'})
     if not table:
         raise ValueError("Could not find S&P 500 table.")
-    return [row.find_all(['td', 'th'])[0].text.strip().replace('.', '-') for row in table.find_all('tr')[1:] if row.find_all(['td', 'th'])]
+    
+    tickers = []
+    for row in table.find_all('tr')[1:]:
+        cells = row.find_all(['td', 'th'])
+        if cells:
+            ticker = cells[0].text.strip().replace('.', '-')
+            if ticker:
+                tickers.append(ticker)
+    return tickers
 
 def get_nasdaq100_tickers():
     url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
@@ -44,7 +52,15 @@ def get_nasdaq100_tickers():
     tables = soup.find_all('table', {'class': 'wikitable'})
     if not tables:
         raise ValueError("Could not find Nasdaq-100 table.")
-    return [row.find_all(['td', 'th'])[0].text.strip().replace('.', '-') for row in tables[0].find_all('tr')[1:] if row.find_all(['td', 'th']) and len(row.find_all(['td', 'th')[0].text.strip()) <= 6]
+        
+    tickers = []
+    for row in tables[0].find_all('tr')[1:]:
+        cells = row.find_all(['td', 'th'])
+        if cells:
+            ticker = cells[0].text.strip().replace('.', '-')
+            if ticker and len(ticker) <= 6:
+                tickers.append(ticker)
+    return tickers
 
 # ==========================================
 # 2. TELEGRAM & LOGGING SYSTEMS
@@ -159,11 +175,9 @@ def run_quant_analysis(ticker):
     current_volume = float(volume.iloc[-1])
     has_volume_support = current_volume >= (avg_volume * 1.2)
 
-    # Evaluate individual rules for logging clarity
     rsi_pass = rsi < 35
     trend_pass = (current_price > sma_20) and (sma_20 > sma_50)
     
-    # Base metric summary string
     metrics_log = (
         f"[{now_str}] 🔍 {ticker} "
         f"| Price: ${current_price:.2f} "
@@ -184,7 +198,6 @@ def run_quant_analysis(ticker):
         print(f"{metrics_log} -> NO BUY (Insufficient volume support)", flush=True)
         return None
 
-    # If technicals pass, fetch sentiment & evaluate conviction
     nlp_score = analyze_news_sentiment(ticker)
     tech_score = (100 - rsi) / 100.0
     conviction = int(((tech_score * 0.5) + (nlp_score * 0.5)) * 100)
