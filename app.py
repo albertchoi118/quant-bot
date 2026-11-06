@@ -26,7 +26,11 @@ CSV_FILE = "backtest_signals.csv"
 @st.cache_data(ttl=60)
 def load_data():
     if not Path(CSV_FILE).is_file():
-        return pd.DataFrame(columns=["Timestamp", "Ticker", "Exchange", "Price", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"])
+        return pd.DataFrame(columns=[
+            "Timestamp", "Ticker", "Exchange", "Price", "RSI", 
+            "SMA200", "Stop_Loss", "Take_Profit", "Signal", 
+            "Status", "Exit_Price", "Exit_Date"
+        ])
     df = pd.read_csv(CSV_FILE)
     return df
 
@@ -50,10 +54,20 @@ def evaluate_trade_outcomes(signal_df):
         stop_loss = float(row["Stop_Loss"])
         take_profit = float(row["Take_Profit"])
         
-        status = "Active / Open"
+        status = row.get("Status", "OPEN")
+        exit_price = row.get("Exit_Price", np.nan)
         return_pct = 0.0
-        exit_price = None  # Explicitly NULL (NaN) for Active / Open trades
         
+        # If already closed in CSV history, retain its state
+        if str(status).upper() not in ["OPEN", "ACTIVE / OPEN"]:
+            row_dict = row.to_dict()
+            if pd.notna(exit_price) and exit_price > 0:
+                return_pct = ((float(exit_price) - entry_price) / entry_price) * 100
+            row_dict["Return_Pct"] = round(return_pct, 2)
+            results.append(row_dict)
+            continue
+
+        # Otherwise, dynamically evaluate current market outcome
         bars = pd.DataFrame()
         try:
             start_str = entry_time.strftime("%Y-%m-%d")
@@ -89,7 +103,7 @@ def evaluate_trade_outcomes(signal_df):
                 return_pct = ((exit_price - entry_price) / entry_price) * 100
             else:
                 status = "Active / Open"
-                exit_price = None
+                exit_price = np.nan
                 return_pct = ((current_price - entry_price) / entry_price) * 100
         else:
             hit_found = False
@@ -122,11 +136,11 @@ def evaluate_trade_outcomes(signal_df):
             if not hit_found:
                 last_price = float(bars['Close'].iloc[-1])
                 status = "Active / Open"
-                exit_price = None
+                exit_price = np.nan
                 return_pct = ((last_price - entry_price) / entry_price) * 100
                 
         row_dict = row.to_dict()
-        row_dict["Exit_Price"] = round(exit_price, 2) if exit_price is not None else np.nan
+        row_dict["Exit_Price"] = round(exit_price, 2) if pd.notna(exit_price) else np.nan
         row_dict["Return_Pct"] = round(return_pct, 2)
         row_dict["Status"] = status
         results.append(row_dict)
@@ -137,11 +151,11 @@ with st.spinner("Analyzing trade outcomes and historical price action..."):
     perf_df = evaluate_trade_outcomes(df)
 
 # ==========================================
-# SIDEBAR FILTERS (Default Empty = Everything)
+# SIDEBAR FILTERS
 # ==========================================
 st.sidebar.header("🔍 Filter Signals")
 
-all_exchanges = sorted(perf_df["Exchange"].dropna().unique().tolist())
+all_exchanges = sorted(perf_df["Exchange"].dropna().unique().tolist()) if "Exchange" in perf_df.columns else []
 selected_exchanges = st.sidebar.multiselect(
     "Select Exchange(s)", 
     options=all_exchanges, 
@@ -155,7 +169,6 @@ selected_tickers = st.sidebar.multiselect(
     default=[]
 )
 
-# Apply filters: Empty selection shows all
 filtered_df = perf_df.copy()
 if selected_exchanges:
     filtered_df = filtered_df[filtered_df["Exchange"].isin(selected_exchanges)]
@@ -163,12 +176,12 @@ if selected_tickers:
     filtered_df = filtered_df[filtered_df["Ticker"].isin(selected_tickers)]
 
 # ==========================================
-# TOP METRICS SUMMARY (Dynamic Responsive Grid)
+# TOP METRICS SUMMARY
 # ==========================================
 total_signals = len(filtered_df)
-wins = len(filtered_df[filtered_df["Status"].str.contains("Win")])
-losses = len(filtered_df[filtered_df["Status"].str.contains("Loss")])
-active = len(filtered_df[filtered_df["Status"].str.contains("Active")])
+wins = len(filtered_df[filtered_df["Status"].str.contains("Win", case=False, na=False)])
+losses = len(filtered_df[filtered_df["Status"].str.contains("Loss", case=False, na=False)])
+active = len(filtered_df[filtered_df["Status"].str.contains("Open|Active", case=False, na=False)])
 win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
 avg_return = filtered_df["Return_Pct"].mean() if total_signals > 0 else 0.0
 
@@ -204,7 +217,7 @@ st.markdown(f"""
 st.markdown("---")
 
 # ==========================================
-# TRADE-BY-TRADE COMPOUNDED EQUITY CURVE
+# EQUITY CURVE
 # ==========================================
 st.subheader("📊 Strategy Cumulative Equity Curve")
 
@@ -217,7 +230,7 @@ if not chart_df.empty:
 
     fig = go.Figure()
     
-    is_positive = chart_df["Cumulative_Return"].iloc[-1] >= 0
+    is_positive = chart_df["Cumulative_Return"].iloc[-1] >= 0 if not chart_df.empty else True
     curve_color = "#00D26A" if is_positive else "#FF3B30"
     fill_color = "rgba(0, 210, 106, 0.1)" if is_positive else "rgba(255, 59, 48, 0.1)"
 
@@ -235,15 +248,7 @@ if not chart_df.empty:
     fig.update_xaxes(
         showgrid=True,
         gridcolor="rgba(128, 128, 128, 0.2)",
-        rangeslider_visible=True,
-        rangeselector=dict(
-            buttons=list([
-                dict(count=7, label="1w", step="day", stepmode="backward"),
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=3, label="3m", step="month", stepmode="backward"),
-                dict(step="all", label="All")
-            ])
-        )
+        rangeslider_visible=True
     )
     
     fig.update_yaxes(
@@ -262,7 +267,7 @@ if not chart_df.empty:
 
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No data available for the selected filters to render the equity curve.")
+    st.info("No data available for the selected filters.")
 
 st.markdown("---")
 
@@ -270,14 +275,14 @@ st.markdown("---")
 # LIVE ACTIVE MARKET FEED SECTION
 # ==========================================
 st.subheader("🟢 Live Active Market Feed (Pending Outcomes)")
-active_df = filtered_df[filtered_df["Status"] == "Active / Open"]
+active_df = filtered_df[filtered_df["Status"].str.contains("Open|Active", case=False, na=False)]
 
 if active_df.empty:
-    st.info("No active trades currently pending. All past signals have hit either Take Profit or Stop Loss.")
+    st.info("No active trades currently pending.")
 else:
-    active_display_cols = ["Timestamp", "Ticker", "Exchange", "Price", "Exit_Price", "Return_Pct", "Status", "RSI", "Conviction", "Stop_Loss", "Take_Profit"]
+    active_cols = ["Timestamp", "Ticker", "Exchange", "Price", "Exit_Price", "Return_Pct", "Status", "RSI", "Stop_Loss", "Take_Profit"]
     st.dataframe(
-        active_df[active_display_cols].sort_values(by="Timestamp", ascending=False),
+        active_df[active_cols].sort_values(by="Timestamp", ascending=False),
         use_container_width=True,
         hide_index=True
     )
@@ -291,7 +296,7 @@ st.subheader("📋 Complete Signal Log")
 
 display_cols = [
     "Timestamp", "Ticker", "Exchange", "Price", "Exit_Price", 
-    "Return_Pct", "Status", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"
+    "Return_Pct", "Status", "RSI", "SMA200", "Stop_Loss", "Take_Profit"
 ]
 
 st.dataframe(
