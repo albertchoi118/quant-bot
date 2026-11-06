@@ -1,5 +1,7 @@
 import os
 import time
+import csv
+from pathlib import Path
 import requests
 import pandas as pd
 import ta
@@ -28,7 +30,7 @@ api = alpaca.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_versio
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 # ==========================================
-# 1. UNIVERSE FETCHERS (Direct BeautifulSoup - No Pandas Read_Html)
+# 1. UNIVERSE FETCHERS (Direct BeautifulSoup)
 # ==========================================
 def get_sp500_tickers():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -73,9 +75,9 @@ def get_nasdaq100_tickers():
 def get_penny_stocks():
     # High-volume exchange-listed micro-caps / penny stocks
     return ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
-    
+
 # ==========================================
-# 2. TELEGRAM ALERT SYSTEM
+# 2. TELEGRAM & BACKTEST LOGGING SYSTEMS
 # ==========================================
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -88,6 +90,26 @@ def send_telegram_alert(message):
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"Failed to send Telegram alert: {e}")
+
+def log_signal_to_csv(result):
+    file_path = "backtest_signals.csv"
+    file_exists = Path(file_path).is_file()
+    
+    with open(file_path, mode="a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Ticker", "Price", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"])
+        
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            result["ticker"],
+            result["price"],
+            result["rsi"],
+            result["nlp"],
+            result["conviction"],
+            result["stop_loss"],
+            result["take_profit"]
+        ])
 
 # ==========================================
 # 3. LIVE DATA & QUANT ANALYSIS ENGINE
@@ -181,9 +203,12 @@ def main():
             )
             print(f"Signal Detected: {result['ticker']} @ ${result['price']}")
             send_telegram_alert(msg)
+            log_signal_to_csv(result)
             signals_found += 1
-            time.sleep(1)  # Prevent Telegram API rate limits
             
+        # Respect Alpaca free-tier rate limits (max ~200 requests/min)
+        time.sleep(0.5)
+        
     print(f"Scan complete. Found {signals_found} high-conviction opportunities.")
 
 if __name__ == "__main__":
