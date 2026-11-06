@@ -1,216 +1,255 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, date
+from datetime import datetime, timedelta
+from pathlib import Path
 
-# Page Configuration
+# ==========================================
+# PAGE CONFIGURATION
+# ==========================================
 st.set_page_config(
-    page_title="Advanced Quant Bot Dashboard",
+    page_title="Quant Scanner Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 24/7 Quant Scanner, Live Feed & Performance Analytics")
-st.markdown("Advanced quantitative trading dashboard with backtest simulation, equity curve tracking, and multi-parameter filtering.")
-
-# Load Historical Signal Data safely
-@st.cache_data(ttl=15)
-def load_signal_data():
-    try:
-        df = pd.read_csv("backtest_signals.csv")
-        if df.empty or "Ticker" not in df.columns:
-            return pd.DataFrame()
-        # Fallback if CSV was created before Exchange column was added
-        if "Exchange" not in df.columns:
-            df["Exchange"] = "S&P 500"
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-df_signals = load_signal_data()
+st.title("📈 Live Quant Scanner & Signal Dashboard")
+st.markdown("Monitoring automated institutional mean-reversion setups, historical backtests, and active trades.")
 
 # ==========================================
-# BACKTEST EVALUATION & METRICS ENGINE
+# LOAD DATA
 # ==========================================
-def run_backtest_simulation(df):
-    if df.empty or "Ticker" not in df.columns:
-        return pd.DataFrame()
-    
+CSV_FILE = "backtest_signals.csv"
+
+@st.cache_data(ttl=60)
+def load_data():
+    if not Path(CSV_FILE).is_file():
+        return pd.DataFrame(columns=["Timestamp", "Ticker", "Exchange", "Price", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"])
+    df = pd.read_csv(CSV_FILE)
+    return df
+
+df = load_data()
+
+if df.empty:
+    st.warning("⚠️ No signal data found in `backtest_signals.csv`. Run the bot or add mock data.")
+    st.stop()
+
+# ==========================================
+# CHRONOLOGICAL FIRST-HIT SIMULATION ENGINE
+# ==========================================
+@st.cache_data(ttl=300)
+def evaluate_trade_outcomes(signal_df):
     results = []
     
-    for _, row in df.iterrows():
-        ticker = str(row["Ticker"]).replace('-', '.')
-        entry_time = str(row["Timestamp"])
+    for _, row in signal_df.iterrows():
+        ticker = row["Ticker"]
+        entry_time = pd.to_datetime(row["Timestamp"])
         entry_price = float(row["Price"])
         stop_loss = float(row["Stop_Loss"])
         take_profit = float(row["Take_Profit"])
-        exchange = str(row.get("Exchange", "S&P 500"))
-        conviction = int(row["Conviction"]) if "Conviction" in row else 78
         
-        status = "Open ⏳"
+        status = "Active / Open"
         return_pct = 0.0
+        exit_price = entry_price
         
         try:
-            start_date = entry_time.split()[0]
-            hist = yf.Ticker(ticker).history(start=start_date, interval="1h")
-            if not hist.empty:
-                sub_hist = hist[hist.index >= entry_time]
-                if not sub_hist.empty:
-                    for _, bar in sub_hist.iterrows():
-                        high = float(bar['High'])
-                        low = float(bar['Low'])
-                        
-                        if high >= take_profit:
-                            status = "Win 🎯"
-                            return_pct = ((take_profit - entry_price) / entry_price) * 100
-                            break
-                        elif low <= stop_loss:
-                            status = "Loss 🛡️"
-                            return_pct = ((stop_loss - entry_price) / entry_price) * 100
-                            break
-                    else:
-                        current_p = float(sub_hist.iloc[-1]['Close'])
-                        return_pct = ((current_p - entry_price) / entry_price) * 100
-        except Exception:
-            pass
+            start_str = entry_time.strftime("%Y-%m-%d")
+            end_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            bars = yf.download(ticker, start=start_str, end=end_str, interval="1h", progress=False)
+            if bars.empty:
+                bars = yf.download(ticker, start=start_str, end=end_str, interval="1d", progress=False)
             
-        results.append({
-            "Timestamp": row["Timestamp"],
-            "Date": pd.to_datetime(row["Timestamp"]).date(),
-            "Ticker": row["Ticker"],
-            "Exchange / Category": exchange,
-            "Entry Price": f"${entry_price:.2f}",
-            "Take Profit": f"${take_profit:.2f}",
-            "Stop Loss": f"${stop_loss:.2f}",
-            "Conviction": conviction,
-            "Status": status,
-            "Return (%)": round(return_pct, 2)
-        })
+            if not bars.empty:
+                if isinstance(bars.columns, pd.MultiIndex):
+                    bars.columns = bars.columns.get_level_values(0)
+                bars = bars[bars.index >= entry_time]
+        except Exception:
+            bars = pd.DataFrame()
+            
+        if bars.empty:
+            # Fallback to current price if no historical post-entry bars are available
+            try:
+                curr_data = yf.download(ticker, period="1d", interval="1m", progress=False)
+                current_price = float(curr_data['Close'].iloc[-1]) if not curr_data.empty else entry_price
+            except Exception:
+                current_price = entry_price
+                
+            if current_price >= take_profit:
+                status = "Win (TP Hit)"
+                return_pct = ((take_profit - entry_price) / entry_price) * 100
+                exit_price = take_profit
+            elif current_price <= stop_loss:
+                status = "Loss (SL Hit)"
+                return_pct = ((stop_loss - entry_price) / entry_price) * 100
+                exit_price = stop_loss
+            else:
+                status = "Active / Open"
+                return_pct = ((current_price - entry_price) / entry_price) * 100
+                exit_price = current_price
+        else:
+            # Bar-by-bar chronological check to find which threshold hit FIRST
+            hit_found = False
+            for _, bar in bars.iterrows():
+                high = float(bar['High'])
+                low = float(bar['Low'])
+                
+                hit_tp = high >= take_profit
+                hit_sl = low <= stop_loss
+                
+                if hit_tp and hit_sl:
+                    # Conservative tie-breaker if both hit in same bar
+                    status = "Loss (SL Hit)"
+                    return_pct = ((stop_loss - entry_price) / entry_price) * 100
+                    exit_price = stop_loss
+                    hit_found = True
+                    break
+                elif hit_tp:
+                    status = "Win (TP Hit)"
+                    return_pct = ((take_profit - entry_price) / entry_price) * 100
+                    exit_price = take_profit
+                    hit_found = True
+                    break
+                elif hit_sl:
+                    status = "Loss (SL Hit)"
+                    return_pct = ((stop_loss - entry_price) / entry_price) * 100
+                    exit_price = stop_loss
+                    hit_found = True
+                    break
+            
+            if not hit_found:
+                last_price = float(bars['Close'].iloc[-1])
+                status = "Active / Open"
+                return_pct = ((last_price - entry_price) / entry_price) * 100
+                exit_price = last_price
+                
+        row_dict = row.to_dict()
+        row_dict["Exit_Price"] = round(exit_price, 2)
+        row_dict["Return_Pct"] = round(return_pct, 2)
+        row_dict["Status"] = status
+        results.append(row_dict)
         
     return pd.DataFrame(results)
 
-# Run base simulation
-full_bt_df = run_backtest_simulation(df_signals)
+with st.spinner("Analyzing trade outcomes and historical price action..."):
+    perf_df = evaluate_trade_outcomes(df)
 
 # ==========================================
-# SIDEBAR FILTER CONTROL CENTER
+# SIDEBAR FILTERS (FIXED: Empty = Everything)
 # ==========================================
-st.sidebar.header("🎛️ Dashboard Filters")
+st.sidebar.header("🔍 Filter Signals")
 
-if not full_bt_df.empty:
-    min_date = pd.to_datetime(full_bt_df["Date"]).min()
-    max_date = pd.to_datetime(full_bt_df["Date"]).max()
-    date_range = st.sidebar.date_input(
-        "Select Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
+all_exchanges = sorted(perf_df["Exchange"].dropna().unique().tolist())
+selected_exchanges = st.sidebar.multiselect(
+    "Select Exchange(s)", 
+    options=all_exchanges, 
+    default=[] # Empty = Everything
+)
+
+all_tickers = sorted(perf_df["Ticker"].dropna().unique().tolist())
+selected_tickers = st.sidebar.multiselect(
+    "Select Ticker(s)", 
+    options=all_tickers, 
+    default=[] # Empty = Everything
+)
+
+# Apply filters logically
+filtered_df = perf_df.copy()
+if selected_exchanges:
+    filtered_df = filtered_df[filtered_df["Exchange"].isin(selected_exchanges)]
+if selected_tickers:
+    filtered_df = filtered_df[filtered_df["Ticker"].isin(selected_tickers)]
+
+# ==========================================
+# TOP METRICS SUMMARY
+# ==========================================
+total_signals = len(filtered_df)
+wins = len(filtered_df[filtered_df["Status"].str.contains("Win")])
+losses = len(filtered_df[filtered_df["Status"].str.contains("Loss")])
+active = len(filtered_df[filtered_df["Status"].str.contains("Active")])
+win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
+avg_return = filtered_df["Return_Pct"].mean() if total_signals > 0 else 0.0
+
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1.metric("Total Signals", total_signals)
+col2.metric("Wins (TP)", wins)
+col3.metric("Losses (SL)", losses)
+col4.metric("Win Rate", f"{win_rate:.1f}%")
+col5.metric("Active / Open", active)
+col6.metric("Avg Return", f"{avg_return:+.2f}%")
+
+st.markdown("---")
+
+# ==========================================
+# CUMULATIVE TIME SERIES CHART WITH GRANULARITY
+# ==========================================
+st.subheader("📊 Cumulative Performance Over Time")
+
+granularity = st.radio(
+    "Select Chart Granularity", 
+    options=["Daily", "Weekly", "Monthly"], 
+    horizontal=True
+)
+
+chart_df = filtered_df.copy()
+chart_df["Parsed_Time"] = pd.to_datetime(chart_df["Timestamp"])
+
+if granularity == "Daily":
+    chart_df["Period"] = chart_df["Parsed_Time"].dt.date
+elif granularity == "Weekly":
+    chart_df["Period"] = chart_df["Parsed_Time"].dt.to_period("W").dt.start_time.dt.date
+else:
+    chart_df["Period"] = chart_df["Parsed_Time"].dt.to_period("M").dt.start_time.dt.strftime("%Y-%m")
+
+# Group and compute cumulative returns
+grouped = chart_df.groupby("Period")["Return_Pct"].mean().reset_index()
+grouped = grouped.sort_values("Period")
+grouped["Cumulative_Return"] = grouped["Return_Pct"].cumsum()
+
+st.line_chart(grouped.set_index("Period")["Cumulative_Return"])
+
+st.markdown("---")
+
+# ==========================================
+# LIVE ACTIVE MARKET FEED SECTION
+# ==========================================
+st.subheader("🟢 Live Active Market Feed (Pending Outcomes)")
+active_df = filtered_df[filtered_df["Status"] == "Active / Open"]
+
+if active_df.empty:
+    st.info("No active trades currently pending. All past signals have hit either Take Profit or Stop Loss.")
+else:
+    active_display_cols = ["Timestamp", "Ticker", "Exchange", "Price", "Exit_Price", "Return_Pct", "Status", "RSI", "Conviction", "Stop_Loss", "Take_Profit"]
+    st.dataframe(
+        active_df[active_display_cols].sort_values(by="Timestamp", ascending=False),
+        use_container_width=True,
+        hide_index=True
     )
 
-    all_tickers = sorted(full_bt_df["Ticker"].unique().tolist())
-    selected_tickers = st.sidebar.multiselect("Filter by Ticker", options=all_tickers, default=all_tickers)
-
-    all_categories = sorted(full_bt_df["Exchange / Category"].unique().tolist())
-    selected_categories = st.sidebar.multiselect("Filter by Exchange / Universe", options=all_categories, default=all_categories)
-
-    if len(date_range) == 2:
-        start_d, end_d = date_range
-        filtered_df = full_bt_df[
-            (full_bt_df["Date"] >= start_d) & 
-            (full_bt_df["Date"] <= end_d) &
-            (full_bt_df["Ticker"].isin(selected_tickers)) &
-            (full_bt_df["Exchange / Category"].isin(selected_categories))
-        ]
-    else:
-        filtered_df = full_bt_df
-else:
-    st.sidebar.info("ℹ️ Filters will appear here once your bot logs its first high-conviction signal into the CSV.")
-    filtered_df = pd.DataFrame()
-
-# Calculate filtered metrics safely
-if not filtered_df.empty:
-    wins = len(filtered_df[filtered_df["Status"] == "Win 🎯"])
-    losses = len(filtered_df[filtered_df["Status"] == "Loss 🛡️"])
-    total_closed = wins + losses
-    win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
-    cumulative_return = filtered_df["Return (%)"].sum()
-else:
-    wins, losses, win_rate, cumulative_return = 0, 0, 0.0, 0.0
+st.markdown("---")
 
 # ==========================================
-# 1. TOP OVERALL PERFORMANCE METRICS
+# FULL SIGNAL LOG & PERFORMANCE TABLE
 # ==========================================
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.metric("Total Signals", len(filtered_df))
-with col2:
-    st.metric("Strategy Win Rate", f"{win_rate:.1f}%", f"{wins}W / {losses}L")
-with col3:
-    st.metric("Cumulative Return", f"{cumulative_return:+.2f}%")
-with col4:
-    avg_conv = f"{filtered_df['Conviction'].mean():.1f}%" if not filtered_df.empty else "N/A"
-    st.metric("Avg Conviction", avg_conv)
-with col5:
-    last_time = filtered_df.iloc[-1]["Timestamp"] if not filtered_df.empty else "Waiting for signals..."
-    st.metric("Last Scan", last_time)
+st.subheader("📋 Complete Signal Log")
 
-st.divider()
+display_cols = [
+    "Timestamp", "Ticker", "Exchange", "Price", "Exit_Price", 
+    "Return_Pct", "Status", "RSI", "NLP_Score", "Conviction", "Stop_Loss", "Take_Profit"
+]
+
+st.dataframe(
+    filtered_df[display_cols].sort_values(by="Timestamp", ascending=False),
+    use_container_width=True,
+    hide_index=True
+)
 
 # ==========================================
-# 2. OVERALL PERFORMANCE EQUITY CURVE
+# DOWNLOAD CSV BUTTON
 # ==========================================
-st.subheader("📈 Overall Performance Equity Curve (Cumulative Return Over Time)")
-if not filtered_df.empty:
-    chart_data = filtered_df.sort_values(by="Timestamp").copy()
-    chart_data["Cumulative Return (%)"] = chart_data["Return (%)"].cumsum()
-    st.line_chart(chart_data.set_index("Timestamp")["Cumulative Return (%)"])
-else:
-    st.info("ℹ️ No performance data available yet. Waiting for signals to be logged.")
-
-st.divider()
-
-# ==========================================
-# 3. BACKTEST PERFORMANCE ANALYTICS TABLE
-# ==========================================
-st.subheader("🎯 Backtest Simulation Results")
-if not filtered_df.empty:
-    display_cols = ["Timestamp", "Ticker", "Exchange / Category", "Entry Price", "Take Profit", "Stop Loss", "Conviction", "Status", "Return (%)"]
-    st.dataframe(filtered_df[display_cols].sort_values(by="Timestamp", ascending=False), use_container_width=True, hide_index=True)
-else:
-    st.info("ℹ️ No historical signals logged yet. Your backtest table will populate automatically once your bot logs a signal.")
-
-st.divider()
-
-# ==========================================
-# 4. LIVE MARKET WATCHLIST (TRIGGERED SYMBOLS)
-# ==========================================
-st.subheader("🔴 Live Market Feed (Triggered Symbols)")
-if not filtered_df.empty:
-    unique_filtered_tickers = filtered_df["Ticker"].dropna().unique().tolist()
-    if unique_filtered_tickers:
-        live_data = []
-        for t in unique_filtered_tickers:
-            try:
-                yf_symbol = str(t).replace('-', '.')
-                hist = yf.Ticker(yf_symbol).history(period="2d")
-                if len(hist) >= 2:
-                    price = float(hist['Close'].iloc[-1])
-                    prev_close = float(hist['Close'].iloc[-2])
-                    change_pct = ((price - prev_close) / prev_close) * 100
-                elif len(hist) == 1:
-                    price = float(hist['Close'].iloc[-1])
-                    change_pct = 0.0
-                else:
-                    price, change_pct = None, 0.0
-                
-                live_data.append({
-                    "Ticker": t,
-                    "Live Price": f"${price:.2f}" if price else "N/A",
-                    "Day Change": f"{change_pct:+.2f}%" if price else "0.00%",
-                })
-            except Exception:
-                live_data.append({"Ticker": t, "Live Price": "N/A", "Day Change": "0.00%"})
-                
-        st.dataframe(pd.DataFrame(live_data), use_container_width=True, hide_index=True)
-else:
-    st.info("ℹ️ Real-time prices for triggered symbols will appear here once your bot logs a signal.")
+csv_data = filtered_df.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label="📥 Download Filtered Signals as CSV",
+    data=csv_data,
+    file_name="filtered_quant_signals.csv",
+    mime="text/csv"
+)
