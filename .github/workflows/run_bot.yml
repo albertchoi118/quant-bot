@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas ta finnhub-python alpaca-trade-api requests
+          pip install pandas ta finnhub-python alpaca-trade-api requests lxml
 
       - name: Run Quant Bot Script
         env:
