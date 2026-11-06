@@ -6,7 +6,7 @@ import pandas as pd
 import ta
 import finnhub
 import alpaca_trade_api as alpaca
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
@@ -27,7 +27,7 @@ finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 vader_analyzer = SentimentIntensityAnalyzer()
 
 # ==========================================
-# 1. UNIVERSE FETCHERS (Direct BeautifulSoup)
+# 1. UNIVERSE FETCHERS
 # ==========================================
 def get_sp500_tickers():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -55,13 +55,29 @@ def get_penny_stocks():
     return ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
 
 # ==========================================
-# 2. TELEGRAM & BACKTEST LOGGING SYSTEMS
+# 2. TELEGRAM & LOGGING SYSTEMS (WITH COOLDOWN)
 # ==========================================
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=5)
+
+def is_recent_signal(ticker, hours=24):
+    """Prevents spamming alerts for the same ticker within a 24-hour window."""
+    file_path = "backtest_signals.csv"
+    if not Path(file_path).is_file():
+        return False
+    try:
+        df = pd.read_csv(file_path)
+        if df.empty or "Ticker" not in df.columns or "Timestamp" not in df.columns:
+            return False
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        recent = df[(df["Ticker"] == ticker) & (df["Timestamp"] >= cutoff_time)]
+        return not recent.empty
+    except Exception:
+        return False
 
 def log_signal_to_csv(result):
     file_path = "backtest_signals.csv"
@@ -83,7 +99,7 @@ def log_signal_to_csv(result):
         ])
 
 # ==========================================
-# 3. LIVE DATA & ADVANCED VADER SENTIMENT ENGINE
+# 3. ADVANCED QUANT & SENTIMENT ENGINE
 # ==========================================
 def fetch_live_bars(ticker):
     try:
@@ -97,14 +113,11 @@ def analyze_news_sentiment(ticker):
         today = datetime.now().strftime('%Y-%m-%d')
         news = finnhub_client.company_news(ticker, _from=today, to=today)
         if not news:
-            return 0.50  # Neutral baseline if no news today
+            return 0.50
         
         compound_scores = []
-        for item in news[:5]: # Evaluate top 5 recent news items
-            headline = item.get('headline', '')
-            summary = item.get('summary', '')
-            text = f"{headline} {summary}"
-            
+        for item in news[:5]:
+            text = f"{item.get('headline', '')} {item.get('summary', '')}"
             if text.strip():
                 scores = vader_analyzer.polarity_scores(text)
                 compound_scores.append(scores['compound'])
@@ -112,11 +125,7 @@ def analyze_news_sentiment(ticker):
         if not compound_scores:
             return 0.50
             
-        # Average the VADER compound scores (-1.0 to 1.0)
         avg_compound = sum(compound_scores) / len(compound_scores)
-        
-        # Map compound score (-1.0 to 1.0) to bot's NLP scale (0.50 to 0.95)
-        # Negative news gets dampened to 0.50, positive news scales linearly up to 0.95
         normalized_score = 0.50 + (max(0.0, avg_compound) * 0.45)
         return round(max(0.50, min(0.95, normalized_score)), 2)
     except Exception:
@@ -126,24 +135,37 @@ def run_quant_analysis(ticker):
     bars = fetch_live_bars(ticker)
     if bars is None:
         return None
+        
     close = bars['close']
+    volume = bars['volume']
     current_price = float(close.iloc[-1])
+    
+    # Technical Indicators
     rsi = float(ta.momentum.RSIIndicator(close=close, window=14).rsi().iloc[-1])
     sma_20 = float(ta.trend.SMAIndicator(close=close, window=20).sma_indicator().iloc[-1])
     sma_50 = float(ta.trend.SMAIndicator(close=close, window=50).sma_indicator().iloc[-1])
+    
+    # Volume Filter: Current volume must be above average volume (institutional interest)
+    avg_volume = float(volume.rolling(20).mean().iloc[-1])
+    current_volume = float(volume.iloc[-1])
+    has_volume_support = current_volume >= (avg_volume * 1.2)
 
-    # Core Strategy: Oversold dip in a macro uptrend
-    if rsi < 35 and current_price > sma_20 and sma_20 > sma_50:
+    # Core Strategy: Oversold dip in a macro uptrend + Volume confirmation
+    if rsi < 35 and current_price > sma_20 and sma_20 > sma_50 and has_volume_support:
         nlp_score = analyze_news_sentiment(ticker)
         tech_score = (100 - rsi) / 100.0
         conviction = int(((tech_score * 0.5) + (nlp_score * 0.5)) * 100)
         
-        # Must pass high conviction threshold
         if conviction >= 78:
+            # Dynamic ATR-based Stop Loss & Take Profit (Volatility-adjusted)
+            atr = float(ta.volatility.AverageTrueRange(high=bars['high'], low=bars['low'], close=close, window=14).average_true_range().iloc[-1])
+            stop_loss = round(current_price - (1.5 * atr), 2)
+            take_profit = round(current_price + (3.0 * atr), 2) # 2:1 Reward-to-Risk ratio using ATR
+            
             return {
                 "ticker": ticker, "price": current_price, "rsi": round(rsi, 1),
                 "nlp": round(nlp_score, 2), "conviction": conviction,
-                "stop_loss": round(current_price * 0.96, 2), "take_profit": round(current_price * 1.08, 2)
+                "stop_loss": stop_loss, "take_profit": take_profit
             }
     return None
 
@@ -151,36 +173,44 @@ def run_quant_analysis(ticker):
 # MAIN RUNNER
 # ==========================================
 def main():
-    print("🚀 Initializing Fast Live Quant Bot Scan with VADER NLP...")
+    print("🚀 Initializing Enhanced Quant Scan (Volume Filter + ATR Stops + Cooldown)...")
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
     penny_list = get_penny_stocks()
     
-    sp500_set = set(sp500_list)
-    nasdaq_set = set(nasdaq_list)
-    penny_set = set(penny_list)
-    
-    universe = list(sp500_set | nasdaq_set | penny_set)
-    print(f"Tracking {len(universe)} unique tickers across S&P 500, Nasdaq-100, and Penny Stocks.")
+    universe = list(set(sp500_list) | set(nasdaq_list) | set(penny_list))
+    print(f"Tracking {len(universe)} tickers. Checking cooldowns...")
     
     signals_found = 0
     for ticker in universe:
+        # Skip if we already alerted the user for this ticker in the last 24 hours
+        if is_recent_signal(ticker, hours=24):
+            continue
+            
         result = run_quant_analysis(ticker)
         if result:
-            if ticker in penny_set:
+            if ticker in set(penny_list):
                 result["exchange"] = "Penny / OTC"
-            elif ticker in nasdaq_set:
+            elif ticker in set(nasdaq_list):
                 result["exchange"] = "NASDAQ-100"
             else:
                 result["exchange"] = "S&P 500"
                 
-            msg = f"🚨 *HIGH-CONVICTION BUY* 🚨\n\n*Ticker:* `{result['ticker']}`\n*Exchange:* `{result['exchange']}`\n*Price:* `${result['price']:.2f}`\n*NLP Score:* `{result['nlp']}`\n*Conviction:* `{result['conviction']}%`"
+            msg = (
+                f"🚨 *MANUAL TRADE SETUP* 🚨\n\n"
+                f"*Ticker:* `{result['ticker']}`\n"
+                f"*Exchange:* `{result['exchange']}`\n"
+                f"*Entry Price:* `${result['price']:.2f}`\n"
+                f"*Stop Loss:* `${result['stop_loss']:.2f}`\n"
+                f"*Take Profit:* `${result['take_profit']:.2f}`\n"
+                f"*Conviction:* `{result['conviction']}%`"
+            )
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
         
-    print(f"Scan complete. Found {signals_found} signals.")
+    print(f"Scan complete. Found {signals_found} new actionable signals.")
 
 if __name__ == "__main__":
     main()
