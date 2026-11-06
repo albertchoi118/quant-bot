@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from pathlib import Path
+import numpy as np
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -31,11 +32,11 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.warning("⚠️ No signal data found in `backtest_signals.csv`. Run the bot or add mock data.")
+    st.warning("⚠️ No signal data found in `backtest_signals.csv`. Run the bot or check your repository setup.")
     st.stop()
 
 # ==========================================
-# CHRONOLOGICAL FIRST-HIT SIMULATION ENGINE
+# ROBUST CHRONOLOGICAL FIRST-HIT EVALUATION ENGINE
 # ==========================================
 @st.cache_data(ttl=300)
 def evaluate_trade_outcomes(signal_df):
@@ -50,44 +51,49 @@ def evaluate_trade_outcomes(signal_df):
         
         status = "Active / Open"
         return_pct = 0.0
-        exit_price = entry_price
+        exit_price = None  # Explicitly NULL (NaN) for Active / Open trades
         
+        bars = pd.DataFrame()
         try:
             start_str = entry_time.strftime("%Y-%m-%d")
             end_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-            bars = yf.download(ticker, start=start_str, end=end_str, interval="1h", progress=False)
-            if bars.empty:
-                bars = yf.download(ticker, start=start_str, end=end_str, interval="1d", progress=False)
+            # Use reliable daily bars for historical multi-month lookbacks
+            bars = yf.download(ticker, start=start_str, end=end_str, interval="1d", progress=False)
             
             if not bars.empty:
                 if isinstance(bars.columns, pd.MultiIndex):
                     bars.columns = bars.columns.get_level_values(0)
-                bars = bars[bars.index >= entry_time]
+                bars = bars[bars.index >= pd.to_datetime(start_str)]
         except Exception:
             bars = pd.DataFrame()
             
         if bars.empty:
-            # Fallback to current price if no historical post-entry bars are available
+            # Fallback check if historical download fails
             try:
-                curr_data = yf.download(ticker, period="1d", interval="1m", progress=False)
-                current_price = float(curr_data['Close'].iloc[-1]) if not curr_data.empty else entry_price
+                curr_data = yf.download(ticker, period="5d", interval="1d", progress=False)
+                if not curr_data.empty:
+                    if isinstance(curr_data.columns, pd.MultiIndex):
+                        curr_data.columns = curr_data.columns.get_level_values(0)
+                    current_price = float(curr_data['Close'].iloc[-1])
+                else:
+                    current_price = entry_price
             except Exception:
                 current_price = entry_price
                 
             if current_price >= take_profit:
                 status = "Win (TP Hit)"
-                return_pct = ((take_profit - entry_price) / entry_price) * 100
                 exit_price = take_profit
+                return_pct = ((exit_price - entry_price) / entry_price) * 100
             elif current_price <= stop_loss:
                 status = "Loss (SL Hit)"
-                return_pct = ((stop_loss - entry_price) / entry_price) * 100
                 exit_price = stop_loss
+                return_pct = ((exit_price - entry_price) / entry_price) * 100
             else:
                 status = "Active / Open"
+                exit_price = None
                 return_pct = ((current_price - entry_price) / entry_price) * 100
-                exit_price = current_price
         else:
-            # Bar-by-bar chronological check to find which threshold hit FIRST
+            # Day-by-day chronological check to determine which target hit FIRST
             hit_found = False
             for _, bar in bars.iterrows():
                 high = float(bar['High'])
@@ -97,33 +103,34 @@ def evaluate_trade_outcomes(signal_df):
                 hit_sl = low <= stop_loss
                 
                 if hit_tp and hit_sl:
-                    # Conservative tie-breaker if both hit in same bar
+                    # Conservative tie-breaker if both breach on the same day
                     status = "Loss (SL Hit)"
-                    return_pct = ((stop_loss - entry_price) / entry_price) * 100
                     exit_price = stop_loss
+                    return_pct = ((exit_price - entry_price) / entry_price) * 100
                     hit_found = True
                     break
                 elif hit_tp:
                     status = "Win (TP Hit)"
-                    return_pct = ((take_profit - entry_price) / entry_price) * 100
                     exit_price = take_profit
+                    return_pct = ((exit_price - entry_price) / entry_price) * 100
                     hit_found = True
                     break
                 elif hit_sl:
                     status = "Loss (SL Hit)"
-                    return_pct = ((stop_loss - entry_price) / entry_price) * 100
                     exit_price = stop_loss
+                    return_pct = ((exit_price - entry_price) / entry_price) * 100
                     hit_found = True
                     break
             
             if not hit_found:
+                # Active / Open trade: Exit price remains NULL (NaN), return tracks floating return
                 last_price = float(bars['Close'].iloc[-1])
                 status = "Active / Open"
+                exit_price = None
                 return_pct = ((last_price - entry_price) / entry_price) * 100
-                exit_price = last_price
                 
         row_dict = row.to_dict()
-        row_dict["Exit_Price"] = round(exit_price, 2)
+        row_dict["Exit_Price"] = round(exit_price, 2) if exit_price is not None else np.nan
         row_dict["Return_Pct"] = round(return_pct, 2)
         row_dict["Status"] = status
         results.append(row_dict)
@@ -134,7 +141,7 @@ with st.spinner("Analyzing trade outcomes and historical price action..."):
     perf_df = evaluate_trade_outcomes(df)
 
 # ==========================================
-# SIDEBAR FILTERS (FIXED: Empty = Everything)
+# SIDEBAR FILTERS (Default Empty = Everything)
 # ==========================================
 st.sidebar.header("🔍 Filter Signals")
 
@@ -142,17 +149,17 @@ all_exchanges = sorted(perf_df["Exchange"].dropna().unique().tolist())
 selected_exchanges = st.sidebar.multiselect(
     "Select Exchange(s)", 
     options=all_exchanges, 
-    default=[] # Empty = Everything
+    default=[]
 )
 
 all_tickers = sorted(perf_df["Ticker"].dropna().unique().tolist())
 selected_tickers = st.sidebar.multiselect(
     "Select Ticker(s)", 
     options=all_tickers, 
-    default=[] # Empty = Everything
+    default=[]
 )
 
-# Apply filters logically
+# Apply filters: Empty selection shows all
 filtered_df = perf_df.copy()
 if selected_exchanges:
     filtered_df = filtered_df[filtered_df["Exchange"].isin(selected_exchanges)]
@@ -200,7 +207,6 @@ elif granularity == "Weekly":
 else:
     chart_df["Period"] = chart_df["Parsed_Time"].dt.to_period("M").dt.start_time.dt.strftime("%Y-%m")
 
-# Group and compute cumulative returns
 grouped = chart_df.groupby("Period")["Return_Pct"].mean().reset_index()
 grouped = grouped.sort_values("Period")
 grouped["Cumulative_Return"] = grouped["Return_Pct"].cumsum()
