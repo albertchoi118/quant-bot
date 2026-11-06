@@ -4,6 +4,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from pathlib import Path
 import numpy as np
+import plotly.express as px
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -57,7 +58,6 @@ def evaluate_trade_outcomes(signal_df):
         try:
             start_str = entry_time.strftime("%Y-%m-%d")
             end_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-            # Use reliable daily bars for historical multi-month lookbacks
             bars = yf.download(ticker, start=start_str, end=end_str, interval="1d", progress=False)
             
             if not bars.empty:
@@ -68,7 +68,6 @@ def evaluate_trade_outcomes(signal_df):
             bars = pd.DataFrame()
             
         if bars.empty:
-            # Fallback check if historical download fails
             try:
                 curr_data = yf.download(ticker, period="5d", interval="1d", progress=False)
                 if not curr_data.empty:
@@ -93,7 +92,6 @@ def evaluate_trade_outcomes(signal_df):
                 exit_price = None
                 return_pct = ((current_price - entry_price) / entry_price) * 100
         else:
-            # Day-by-day chronological check to determine which target hit FIRST
             hit_found = False
             for _, bar in bars.iterrows():
                 high = float(bar['High'])
@@ -103,7 +101,6 @@ def evaluate_trade_outcomes(signal_df):
                 hit_sl = low <= stop_loss
                 
                 if hit_tp and hit_sl:
-                    # Conservative tie-breaker if both breach on the same day
                     status = "Loss (SL Hit)"
                     exit_price = stop_loss
                     return_pct = ((exit_price - entry_price) / entry_price) * 100
@@ -123,7 +120,6 @@ def evaluate_trade_outcomes(signal_df):
                     break
             
             if not hit_found:
-                # Active / Open trade: Exit price remains NULL (NaN), return tracks floating return
                 last_price = float(bars['Close'].iloc[-1])
                 status = "Active / Open"
                 exit_price = None
@@ -187,31 +183,47 @@ col6.metric("Avg Return", f"{avg_return:+.2f}%")
 st.markdown("---")
 
 # ==========================================
-# CUMULATIVE TIME SERIES CHART WITH GRANULARITY
+# INTERACTIVE ZOOMABLE TIME SERIES CHART
 # ==========================================
 st.subheader("📊 Cumulative Performance Over Time")
-
-granularity = st.radio(
-    "Select Chart Granularity", 
-    options=["Daily", "Weekly", "Monthly"], 
-    horizontal=True
-)
+st.markdown("*(Scroll to zoom in/out natively on the chart timeline or drag to pan)*")
 
 chart_df = filtered_df.copy()
-chart_df["Parsed_Time"] = pd.to_datetime(chart_df["Timestamp"])
+chart_df["Timestamp"] = pd.to_datetime(chart_df["Timestamp"])
+chart_df = chart_df.sort_values("Timestamp")
+chart_df["Cumulative_Return"] = chart_df["Return_Pct"].cumsum()
 
-if granularity == "Daily":
-    chart_df["Period"] = chart_df["Parsed_Time"].dt.date
-elif granularity == "Weekly":
-    chart_df["Period"] = chart_df["Parsed_Time"].dt.to_period("W").dt.start_time.dt.date
+if not chart_df.empty:
+    fig = px.line(
+        chart_df, 
+        x="Timestamp", 
+        y="Cumulative_Return",
+        markers=True,
+        labels={"Cumulative_Return": "Cumulative Return (%)", "Timestamp": "Time"}
+    )
+    
+    # Configure native zoom, scroll-wheel zoom, and range slider
+    fig.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=7, label="1w", step="day", stepmode="backward"),
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(step="all", label="All")
+            ])
+        )
+    )
+    
+    fig.update_layout(
+        height=450,
+        margin=dict(l=10, r=10, t=30, b=10),
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    chart_df["Period"] = chart_df["Parsed_Time"].dt.to_period("M").dt.start_time.dt.strftime("%Y-%m")
-
-grouped = chart_df.groupby("Period")["Return_Pct"].mean().reset_index()
-grouped = grouped.sort_values("Period")
-grouped["Cumulative_Return"] = grouped["Return_Pct"].cumsum()
-
-st.line_chart(grouped.set_index("Period")["Cumulative_Return"])
+    st.info("No data available for the selected filters to render the time series chart.")
 
 st.markdown("---")
 
