@@ -139,36 +139,33 @@ def run_quant_analysis(ticker):
     return None
 
 # ==========================================
-# 4. MAIN RUNNER (15-MINUTE POLLING LOOP)
+# MAIN RUNNER (Single-Execution Mode for GitHub Actions)
 # ==========================================
 def main():
-    print("🚀 Initializing Live Quant Bot...")
+    print("🚀 Initializing Live Quant Bot Scan...")
     universe = list(set(get_sp500_tickers() + get_nasdaq100_tickers() + get_penny_stocks()))
     print(f"Tracking {len(universe)} real-time stock tickers.")
     
-    send_telegram_alert(f"🤖 *Live Quant Scanner Online*\nTracking *{len(universe)}* symbols across S&P 500, Nasdaq-100, and Penny Stocks.")
-
-    while True:
-        print(f"\n--- Scan Cycle Started at {datetime.now().strftime('%H:%M:%S')} ---")
-        for ticker in universe:
-            result = run_quant_analysis(ticker)
-            if result:
-                msg = (
-                    f"🚨 *HIGH-CONVICTION BUY SIGNAL* 🚨\n\n"
-                    f"*Ticker:* `{result['ticker']}`\n"
-                    f"*Current Price:* `${result['price']:.2f}`\n"
-                    f"*Conviction Score:* `{result['conviction']}%`\n"
-                    f"*RSI (14):* `{result['rsi']}`\n"
-                    f"*NLP News Score:* `+{result['nlp']}`\n\n"
-                    f"🎯 *Take Profit Target:* `${result['take_profit']}`\n"
-                    f"🛡️ *Stop Loss Floor:* `${result['stop_loss']}`\n"
-                )
-                print(f"Signal Detected: {result['ticker']} @ ${result['price']}")
-                send_telegram_alert(msg)
-                time.sleep(1)  # Prevent Telegram API rate limits
-        
-        print("Cycle finished. Waiting 15 minutes for next candle close...")
-        time.sleep(900)  # 900 seconds = 15 minutes
+    signals_found = 0
+    for ticker in universe:
+        result = run_quant_analysis(ticker)
+        if result:
+            msg = (
+                f"🚨 *HIGH-CONVICTION BUY SIGNAL* 🚨\n\n"
+                f"*Ticker:* `{result['ticker']}`\n"
+                f"*Current Price:* `${result['price']:.2f}`\n"
+                f"*Conviction Score:* `{result['conviction']}%`\n"
+                f"*RSI (14):* `{result['rsi']}`\n"
+                f"*NLP News Score:* `+{result['nlp']}`\n\n"
+                f"🎯 *Take Profit Target:* `${result['take_profit']}`\n"
+                f"🛡️ *Stop Loss Floor:* `${result['stop_loss']}`\n"
+            )
+            print(f"Signal Detected: {result['ticker']} @ ${result['price']}")
+            send_telegram_alert(msg)
+            signals_found += 1
+            time.sleep(1)  # Prevent Telegram API rate limits
+            
+    print(f"Scan complete. Found {signals_found} high-conviction opportunities.")
 
 if __name__ == "__main__":
     main()
