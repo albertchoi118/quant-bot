@@ -163,7 +163,7 @@ if selected_tickers:
     filtered_df = filtered_df[filtered_df["Ticker"].isin(selected_tickers)]
 
 # ==========================================
-# TOP METRICS SUMMARY
+# TOP METRICS SUMMARY (Dynamic Responsive Grid)
 # ==========================================
 total_signals = len(filtered_df)
 wins = len(filtered_df[filtered_df["Status"].str.contains("Win")])
@@ -172,13 +172,34 @@ active = len(filtered_df[filtered_df["Status"].str.contains("Active")])
 win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
 avg_return = filtered_df["Return_Pct"].mean() if total_signals > 0 else 0.0
 
-col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("Total Signals", total_signals)
-col2.metric("Wins (TP)", wins)
-col3.metric("Losses (SL)", losses)
-col4.metric("Win Rate", f"{win_rate:.1f}%")
-col5.metric("Active / Open", active)
-col6.metric("Avg Return", f"{avg_return:+.2f}%")
+st.markdown(f"""
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Total Signals</div>
+        <div style="font-size: 1.4rem; font-weight: 700;">{total_signals}</div>
+    </div>
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Wins (TP)</div>
+        <div style="font-size: 1.4rem; font-weight: 700; color: #00D26A;">{wins}</div>
+    </div>
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Losses (SL)</div>
+        <div style="font-size: 1.4rem; font-weight: 700; color: #FF3B30;">{losses}</div>
+    </div>
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Win Rate</div>
+        <div style="font-size: 1.4rem; font-weight: 700;">{win_rate:.1f}%</div>
+    </div>
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Active / Open</div>
+        <div style="font-size: 1.4rem; font-weight: 700; color: #0084FF;">{active}</div>
+    </div>
+    <div style="background: rgba(128,128,128,0.08); padding: 0.85rem; border-radius: 8px; text-align: center; border: 1px solid rgba(128,128,128,0.15);">
+        <div style="font-size: 0.8rem; color: gray; font-weight: 500;">Avg Return</div>
+        <div style="font-size: 1.4rem; font-weight: 700; color: {'#00D26A' if avg_return >= 0 else '#FF3B30'};">{avg_return:+.2f}%</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -232,7 +253,7 @@ if not chart_df.empty:
     )
 
     fig.update_layout(
-        height=450,
+        height=400,
         margin=dict(l=10, r=10, t=20, b=10),
         hovermode="x unified",
         paper_bgcolor="rgba(0,0,0,0)",
