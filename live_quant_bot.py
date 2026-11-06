@@ -1,6 +1,8 @@
 import os
 import csv
+import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import yfinance as yf
@@ -20,6 +22,22 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Initialize Sentiment Client
 vader_analyzer = SentimentIntensityAnalyzer()
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
+
+# ==========================================
+# 0. MARKET HOURS GUARD
+# ==========================================
+def is_market_open():
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    
+    # Check if weekend (Monday = 0, Sunday = 6)
+    if now_et.weekday() >= 5:
+        return False
+        
+    # Market hours: 9:30 AM to 4:00 PM ET
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    return market_open <= now_et <= market_close
 
 # ==========================================
 # 1. UNIVERSE FETCHERS (S&P 500 & NASDAQ-100)
@@ -224,7 +242,13 @@ def run_quant_analysis(ticker):
 # ==========================================
 def main():
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{start_time}] 🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...", flush=True)
+    
+    # Check Market Hours Guard
+    if not is_market_open():
+        print(f"[{start_time}] 🌙 US Stock Market is currently closed. Exiting script.", flush=True)
+        return
+        
+    print(f"[{start_time}] 🚀 Market is OPEN. Initializing High-Speed Quant Scan...", flush=True)
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
