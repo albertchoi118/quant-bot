@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pandas ta finnhub-python alpaca-trade-api requests beautifulsoup4 html5lib
+          pip install pandas ta finnhub-python alpaca-trade-api requests beautifulsoup4
 
       - name: Run Quant Bot Script
         env:
