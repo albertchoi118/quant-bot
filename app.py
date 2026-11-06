@@ -20,21 +20,14 @@ def load_signal_data():
         df = pd.read_csv("backtest_signals.csv")
         if df.empty or "Ticker" not in df.columns:
             return pd.DataFrame()
+        # Fallback if CSV was created before Exchange column was added
+        if "Exchange" not in df.columns:
+            df["Exchange"] = "S&P 500"
         return df
     except Exception:
         return pd.DataFrame()
 
 df_signals = load_signal_data()
-
-# Helper function to categorize tickers into exchanges/universes for filtering
-def categorize_ticker(ticker):
-    penny_list = ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
-    if ticker in penny_list:
-        return "Penny / OTC"
-    nasdaq_tech = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "NFLX", "AMD", "INTC", "QCOM"]
-    if ticker in nasdaq_tech:
-        return "NASDAQ (Tech/Growth)"
-    return "S&P 500 / NYSE"
 
 # ==========================================
 # BACKTEST EVALUATION & METRICS ENGINE
@@ -51,6 +44,7 @@ def run_backtest_simulation(df):
         entry_price = float(row["Price"])
         stop_loss = float(row["Stop_Loss"])
         take_profit = float(row["Take_Profit"])
+        exchange = str(row.get("Exchange", "S&P 500"))
         conviction = int(row["Conviction"]) if "Conviction" in row else 78
         
         status = "Open ⏳"
@@ -84,7 +78,7 @@ def run_backtest_simulation(df):
             "Timestamp": row["Timestamp"],
             "Date": pd.to_datetime(row["Timestamp"]).date(),
             "Ticker": row["Ticker"],
-            "Exchange / Category": categorize_ticker(row["Ticker"]),
+            "Exchange / Category": exchange,
             "Entry Price": f"${entry_price:.2f}",
             "Take Profit": f"${take_profit:.2f}",
             "Stop Loss": f"${stop_loss:.2f}",
@@ -130,6 +124,7 @@ if not full_bt_df.empty:
     else:
         filtered_df = full_bt_df
 else:
+    st.sidebar.info("ℹ️ Filters will appear here once your bot logs its first high-conviction signal into the CSV.")
     filtered_df = pd.DataFrame()
 
 # Calculate filtered metrics safely
