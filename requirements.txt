@@ -7,3 +7,4 @@ alpaca-trade-api
 requests
 beautifulsoup4
 urllib3>=1.26.18
+vaderSentiment
