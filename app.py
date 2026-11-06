@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -184,9 +183,9 @@ col6.metric("Avg Return", f"{avg_return:+.2f}%")
 st.markdown("---")
 
 # ==========================================
-# PROFESSIONAL PERFORMANCE CHARTS (Equity Curve & Drawdown)
+# POLISHED INTERACTIVE EQUITY CURVE CHART
 # ==========================================
-st.subheader("📊 Strategy Performance & Risk Profile")
+st.subheader("📊 Strategy Cumulative Equity Curve")
 
 chart_df = filtered_df.copy()
 chart_df["Date"] = pd.to_datetime(chart_df["Timestamp"]).dt.date
@@ -195,21 +194,9 @@ if not chart_df.empty:
     daily_perf = chart_df.groupby("Date")["Return_Pct"].mean().reset_index()
     daily_perf = daily_perf.sort_values("Date")
     daily_perf["Cumulative_Return"] = daily_perf["Return_Pct"].cumsum()
+
+    fig = go.Figure()
     
-    # Calculate Drawdown (Underwater Series)
-    running_max = daily_perf["Cumulative_Return"].cummax()
-    daily_perf["Drawdown"] = daily_perf["Cumulative_Return"] - running_max
-
-    # Create subplot layout: Row 1 = Equity Curve, Row 2 = Drawdown
-    fig = make_subplots(
-        rows=2, cols=1, 
-        shared_axes=True, 
-        vertical_spacing=0.12,
-        row_heights=[0.7, 0.3],
-        subplot_titles=("Cumulative Equity Curve (%)", "Strategy Drawdown / Underwater (%)")
-    )
-
-    # 1. Equity Curve Trace
     is_positive = daily_perf["Cumulative_Return"].iloc[-1] >= 0
     curve_color = "#00D26A" if is_positive else "#FF3B30"
     fill_color = "rgba(0, 210, 106, 0.1)" if is_positive else "rgba(255, 59, 48, 0.1)"
@@ -222,34 +209,39 @@ if not chart_df.empty:
         line=dict(color=curve_color, width=2.5),
         fill="tozeroy",
         fillcolor=fill_color
-    ), row=1, col=1)
+    ))
 
-    # 2. Drawdown Trace
-    fig.add_trace(go.Scatter(
-        x=daily_perf["Date"],
-        y=daily_perf["Drawdown"],
-        mode="lines",
-        name="Drawdown",
-        line=dict(color="#FF3B30", width=1.5),
-        fill="tozeroy",
-        fillcolor="rgba(255, 59, 48, 0.15)"
-    ), row=2, col=1)
-
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)")
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)")
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(128, 128, 128, 0.2)",
+        rangeslider_visible=True,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=7, label="1w", step="day", stepmode="backward"),
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(step="all", label="All")
+            ])
+        )
+    )
+    
+    fig.update_yaxes(
+        title_text="Cumulative Return (%)",
+        showgrid=True,
+        gridcolor="rgba(128, 128, 128, 0.2)"
+    )
 
     fig.update_layout(
-        height=550,
-        margin=dict(l=10, r=10, t=30, b=10),
+        height=450,
+        margin=dict(l=10, r=10, t=20, b=10),
         hovermode="x unified",
-        showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No data available for the selected filters to render the performance charts.")
+    st.info("No data available for the selected filters to render the equity curve.")
 
 st.markdown("---")
 
