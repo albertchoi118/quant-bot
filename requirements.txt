@@ -1,0 +1,5 @@
+pandas
+ta
+finnhub-python
+alpaca-trade-api
+requests
