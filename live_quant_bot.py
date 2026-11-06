@@ -44,7 +44,7 @@ def get_nasdaq100_tickers():
     tables = soup.find_all('table', {'class': 'wikitable'})
     if not tables:
         raise ValueError("Could not find Nasdaq-100 table.")
-    return [row.find_all(['td', 'th'])[0].text.strip().replace('.', '-') for row in tables[0].find_all('tr')[1:] if row.find_all(['td', 'th']) and len(row.find_all(['td', 'th'])[0].text.strip()) <= 6]
+    return [row.find_all(['td', 'th'])[0].text.strip().replace('.', '-') for row in tables[0].find_all('tr')[1:] if row.find_all(['td', 'th']) and len(row.find_all(['td', 'th')[0].text.strip()) <= 6]
 
 # ==========================================
 # 2. TELEGRAM & LOGGING SYSTEMS
@@ -94,7 +94,7 @@ def log_signal_to_csv(result):
         ])
 
 # ==========================================
-# 3. QUANT & SENTIMENT ENGINE (CLEAN YFINANCE)
+# 3. QUANT & SENTIMENT ENGINE (DETAILED LOGGING)
 # ==========================================
 def fetch_live_bars(ticker):
     try:
@@ -102,7 +102,6 @@ def fetch_live_bars(ticker):
         if df is None or df.empty or len(df) < 20:
             return None
         
-        # Flatten multi-index columns if present in newer yfinance releases
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
@@ -113,8 +112,7 @@ def fetch_live_bars(ticker):
             return None
             
         return df
-    except Exception as e:
-        print(f"⚠️ Yahoo Finance Error fetching bars for {ticker}: {e}")
+    except Exception:
         return None
 
 def analyze_news_sentiment(ticker):
@@ -140,12 +138,13 @@ def analyze_news_sentiment(ticker):
         normalized_score = 0.50 + (max(0.0, avg_compound) * 0.45)
         return round(max(0.50, min(0.95, normalized_score)), 2)
     except Exception as e:
-        print(f"⚠️ Finnhub Sentiment API Error for {ticker}: {e}")
         return 0.50
 
 def run_quant_analysis(ticker):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bars = fetch_live_bars(ticker)
     if bars is None:
+        print(f"[{now_str}] ⚪ {ticker} | Insufficient or invalid bar data -> NO BUY", flush=True)
         return None
         
     close = bars['close']
@@ -160,41 +159,73 @@ def run_quant_analysis(ticker):
     current_volume = float(volume.iloc[-1])
     has_volume_support = current_volume >= (avg_volume * 1.2)
 
-    if rsi < 35 and current_price > sma_20 and sma_20 > sma_50 and has_volume_support:
-        nlp_score = analyze_news_sentiment(ticker)
-        tech_score = (100 - rsi) / 100.0
-        conviction = int(((tech_score * 0.5) + (nlp_score * 0.5)) * 100)
+    # Evaluate individual rules for logging clarity
+    rsi_pass = rsi < 35
+    trend_pass = (current_price > sma_20) and (sma_20 > sma_50)
+    
+    # Base metric summary string
+    metrics_log = (
+        f"[{now_str}] 🔍 {ticker} "
+        f"| Price: ${current_price:.2f} "
+        f"| RSI: {rsi:.1f} (Req < 35: {rsi_pass}) "
+        f"| SMA20: ${sma_20:.2f} "
+        f"| SMA50: ${sma_50:.2f} "
+        f"| Trend OK: {trend_pass} "
+        f"| Vol Support: {has_volume_support}"
+    )
+
+    if not rsi_pass:
+        print(f"{metrics_log} -> NO BUY (RSI too high)", flush=True)
+        return None
+    if not trend_pass:
+        print(f"{metrics_log} -> NO BUY (Trend criteria failed)", flush=True)
+        return None
+    if not has_volume_support:
+        print(f"{metrics_log} -> NO BUY (Insufficient volume support)", flush=True)
+        return None
+
+    # If technicals pass, fetch sentiment & evaluate conviction
+    nlp_score = analyze_news_sentiment(ticker)
+    tech_score = (100 - rsi) / 100.0
+    conviction = int(((tech_score * 0.5) + (nlp_score * 0.5)) * 100)
+    
+    full_log = f"{metrics_log} | NLP Sentiment: {nlp_score} | Conviction: {conviction}% (Req >= 78%)"
+
+    if conviction >= 78:
+        atr = float(ta.volatility.AverageTrueRange(high=bars['high'], low=bars['low'], close=close, window=14).average_true_range().iloc[-1])
+        stop_loss = round(current_price - (1.5 * atr), 2)
+        take_profit = round(current_price + (3.0 * atr), 2)
         
-        if conviction >= 78:
-            atr = float(ta.volatility.AverageTrueRange(high=bars['high'], low=bars['low'], close=close, window=14).average_true_range().iloc[-1])
-            stop_loss = round(current_price - (1.5 * atr), 2)
-            take_profit = round(current_price + (3.0 * atr), 2)
-            
-            return {
-                "ticker": ticker, "price": current_price, "rsi": round(rsi, 1),
-                "nlp": round(nlp_score, 2), "conviction": conviction,
-                "stop_loss": stop_loss, "take_profit": take_profit
-            }
-    return None
+        print(f"{full_log} -> 🟢 **BUY SIGNAL TRIGGERED!**", flush=True)
+        return {
+            "ticker": ticker, "price": current_price, "rsi": round(rsi, 1),
+            "nlp": round(nlp_score, 2), "conviction": conviction,
+            "stop_loss": stop_loss, "take_profit": take_profit
+        }
+    else:
+        print(f"{full_log} -> NO BUY (Conviction too low)", flush=True)
+        return None
 
 # ==========================================
-# MAIN RUNNER (WITH LIVE PROGRESS LOGS)
+# MAIN RUNNER
 # ==========================================
 def main():
-    print("🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...", flush=True)
+    start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{start_time}] 🚀 Initializing High-Speed Quant Scan (S&P 500 & Nasdaq-100)...", flush=True)
     
     sp500_list = get_sp500_tickers()
     nasdaq_list = get_nasdaq100_tickers()
     
     universe = sorted(list(set(sp500_list) | set(nasdaq_list)))
     total_tickers = len(universe)
-    print(f"📊 Tracking {total_tickers} unique tickers. Starting scan...", flush=True)
+    print(f"[{start_time}] 📊 Tracking {total_tickers} unique tickers. Starting scan...", flush=True)
     
     signals_found = 0
     for idx, ticker in enumerate(universe, 1):
-        print(f"[{idx}/{total_tickers}] Scanning {ticker}...", flush=True)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         if is_recent_signal(ticker, hours=24):
+            print(f"[{now_str}] ⏳ [{idx}/{total_tickers}] {ticker} skipped (24h cooldown active)", flush=True)
             continue
             
         result = run_quant_analysis(ticker)
@@ -213,12 +244,12 @@ def main():
                 f"*Take Profit:* `${result['take_profit']:.2f}`\n"
                 f"*Conviction:* `{result['conviction']}%`"
             )
-            print(f"🎯 SIGNAL FOUND FOR {ticker}! Sending alert & logging...", flush=True)
             send_telegram_alert(msg)
             log_signal_to_csv(result)
             signals_found += 1
         
-    print(f"✅ Scan complete. Found {signals_found} new actionable signals.", flush=True)
+    end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{end_time}] ✅ Scan complete. Found {signals_found} new actionable signals.", flush=True)
 
 if __name__ == "__main__":
     main()
