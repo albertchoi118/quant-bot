@@ -2,7 +2,9 @@ name: Live Quant Bot
 
 on:
   schedule:
-    - cron: '5,20,35,50 * * * *'  # Runs every 15 minutes past the hour
+    # Runs every 10 minutes, Monday through Friday, between 14:00 and 21:50 UTC 
+    # (Covers US Market hours 9:30 AM - 4:00 PM ET across both EST and EDT shifts)
+    - cron: '*/10 14-21 * * 1-5'
   workflow_dispatch:              # Allows manual runs from the GitHub Actions tab
 
 jobs:
