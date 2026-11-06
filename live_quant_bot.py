@@ -6,6 +6,7 @@ import ta
 import finnhub
 import alpaca_trade_api as alpaca
 from datetime import datetime
+from bs4 import BeautifulSoup
 
 # ==========================================
 # CONFIGURATION & ENVIRONMENT VARIABLES
@@ -27,34 +28,52 @@ api = alpaca.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_versio
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 # ==========================================
-# 1. UNIVERSE FETCHERS
+# 1. UNIVERSE FETCHERS (Direct BeautifulSoup - No Pandas Read_Html)
 # ==========================================
 def get_sp500_tickers():
-    try:
-        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        tables = pd.read_html(url, flavor='bs4')
-        return tables[0]['Symbol'].str.replace('.', '-').tolist()
-    except Exception as e:
-        print(f"Error fetching S&P 500: {e}")
-        return ["AAPL", "NVDA", "MSFT", "AMZN"]
+    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    
+    soup = BeautifulSoup(response.text, 'html.parser')
+    table = soup.find('table', {'id': 'constituents'})
+    if not table:
+        raise ValueError("Could not find S&P 500 constituents table on Wikipedia.")
+        
+    tickers = []
+    for row in table.find_all('tr')[1:]:
+        cols = row.find_all(['td', 'th'])
+        if cols:
+            symbol = cols[0].text.strip().replace('.', '-')
+            tickers.append(symbol)
+    return tickers
 
 def get_nasdaq100_tickers():
-    try:
-        url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-        tables = pd.read_html(url, flavor='bs4')
-        for table in tables:
-            if 'Ticker' in table.columns or 'Symbol' in table.columns:
-                col = 'Ticker' if 'Ticker' in table.columns else 'Symbol'
-                return table[col].str.replace('.', '-').tolist()
-        return ["QQQ", "TSLA", "AMD", "META"]
-    except Exception as e:
-        print(f"Error fetching Nasdaq-100: {e}")
-        return []
+    url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    
+    soup = BeautifulSoup(response.text, 'html.parser')
+    tables = soup.find_all('table', {'class': 'wikitable'})
+    if not tables:
+        raise ValueError("Could not find Nasdaq-100 table on Wikipedia.")
+        
+    target_table = tables[0]
+    tickers = []
+    for row in target_table.find_all('tr')[1:]:
+        cols = row.find_all(['td', 'th'])
+        if cols:
+            symbol = cols[0].text.strip().replace('.', '-')
+            if symbol and len(symbol) <= 6:
+                tickers.append(symbol)
+    return tickers
 
 def get_penny_stocks():
-    # High-volume exchange-listed micro-caps / penny stocks ($0.50 - $5.00)
+    # High-volume exchange-listed micro-caps / penny stocks
     return ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
-
+    
 # ==========================================
 # 2. TELEGRAM ALERT SYSTEM
 # ==========================================
