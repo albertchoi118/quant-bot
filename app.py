@@ -90,7 +90,7 @@ def evaluate_trade_outcomes(signal_df):
             else:
                 status = "Active / Open"
                 exit_price = None
-                return_pct = ((exit_price - entry_price) / entry_price) * 100
+                return_pct = ((current_price - entry_price) / entry_price) * 100
         else:
             hit_found = False
             for _, bar in bars.iterrows():
@@ -183,32 +183,30 @@ col6.metric("Avg Return", f"{avg_return:+.2f}%")
 st.markdown("---")
 
 # ==========================================
-# POLISHED COMPOUNDED EQUITY CURVE CHART
+# TRADE-BY-TRADE COMPOUNDED EQUITY CURVE
 # ==========================================
 st.subheader("📊 Strategy Cumulative Equity Curve")
 
 chart_df = filtered_df.copy()
-chart_df["Date"] = pd.to_datetime(chart_df["Timestamp"]).dt.date
+chart_df["Timestamp"] = pd.to_datetime(chart_df["Timestamp"])
+chart_df = chart_df.sort_values("Timestamp")
 
 if not chart_df.empty:
-    daily_perf = chart_df.groupby("Date")["Return_Pct"].mean().reset_index()
-    daily_perf = daily_perf.sort_values("Date")
-    
-    # Correct financial compounding: (1 + r1) * (1 + r2) ... - 1
-    daily_perf["Cumulative_Return"] = ((1 + daily_perf["Return_Pct"] / 100).cumprod() - 1) * 100
+    chart_df["Cumulative_Return"] = ((1 + chart_df["Return_Pct"] / 100).cumprod() - 1) * 100
 
     fig = go.Figure()
     
-    is_positive = daily_perf["Cumulative_Return"].iloc[-1] >= 0
+    is_positive = chart_df["Cumulative_Return"].iloc[-1] >= 0
     curve_color = "#00D26A" if is_positive else "#FF3B30"
     fill_color = "rgba(0, 210, 106, 0.1)" if is_positive else "rgba(255, 59, 48, 0.1)"
 
     fig.add_trace(go.Scatter(
-        x=daily_perf["Date"],
-        y=daily_perf["Cumulative_Return"],
-        mode="lines",
+        x=chart_df["Timestamp"],
+        y=chart_df["Cumulative_Return"],
+        mode="lines+markers",
         name="Equity Curve",
         line=dict(color=curve_color, width=2.5),
+        marker=dict(size=4),
         fill="tozeroy",
         fillcolor=fill_color
     ))
