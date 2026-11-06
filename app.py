@@ -31,7 +31,6 @@ def categorize_ticker(ticker):
     penny_list = ["SNDL", "MULN", "BIOR", "OCGN", "SOUN", "RIG", "CLOV", "TELL", "CAN"]
     if ticker in penny_list:
         return "Penny / OTC"
-    # Major tech / growth often in Nasdaq
     nasdaq_tech = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "NFLX", "AMD", "INTC", "QCOM"]
     if ticker in nasdaq_tech:
         return "NASDAQ (Tech/Growth)"
@@ -42,12 +41,9 @@ def categorize_ticker(ticker):
 # ==========================================
 def run_backtest_simulation(df):
     if df.empty or "Ticker" not in df.columns:
-        return pd.DataFrame(), 0, 0, 0, 0.0
+        return pd.DataFrame()
     
     results = []
-    wins = 0
-    losses = 0
-    open_trades = 0
     
     for _, row in df.iterrows():
         ticker = str(row["Ticker"]).replace('-', '.')
@@ -73,23 +69,16 @@ def run_backtest_simulation(df):
                         if high >= take_profit:
                             status = "Win 🎯"
                             return_pct = ((take_profit - entry_price) / entry_price) * 100
-                            wins += 1
                             break
                         elif low <= stop_loss:
                             status = "Loss 🛡️"
                             return_pct = ((stop_loss - entry_price) / entry_price) * 100
-                            losses += 1
                             break
                     else:
                         current_p = float(sub_hist.iloc[-1]['Close'])
                         return_pct = ((current_p - entry_price) / entry_price) * 100
-                        open_trades += 1
-                else:
-                    open_trades += 1
-            else:
-                open_trades += 1
         except Exception:
-            open_trades += 1
+            pass
             
         results.append({
             "Timestamp": row["Timestamp"],
@@ -104,8 +93,7 @@ def run_backtest_simulation(df):
             "Return (%)": round(return_pct, 2)
         })
         
-    res_df = pd.DataFrame(results)
-    return res_df
+    return pd.DataFrame(results)
 
 # Run base simulation
 full_bt_df = run_backtest_simulation(df_signals)
@@ -116,7 +104,6 @@ full_bt_df = run_backtest_simulation(df_signals)
 st.sidebar.header("🎛️ Dashboard Filters")
 
 if not full_bt_df.empty:
-    # 1. Date Range Filter
     min_date = pd.to_datetime(full_bt_df["Date"]).min()
     max_date = pd.to_datetime(full_bt_df["Date"]).max()
     date_range = st.sidebar.date_input(
@@ -126,15 +113,12 @@ if not full_bt_df.empty:
         max_value=max_date
     )
 
-    # 2. Ticker Filter
     all_tickers = sorted(full_bt_df["Ticker"].unique().tolist())
     selected_tickers = st.sidebar.multiselect("Filter by Ticker", options=all_tickers, default=all_tickers)
 
-    # 3. Exchange / Category Filter
     all_categories = sorted(full_bt_df["Exchange / Category"].unique().tolist())
     selected_categories = st.sidebar.multiselect("Filter by Exchange / Universe", options=all_categories, default=all_categories)
 
-    # Apply Filters to DataFrame
     if len(date_range) == 2:
         start_d, end_d = date_range
         filtered_df = full_bt_df[
@@ -148,9 +132,8 @@ if not full_bt_df.empty:
 else:
     filtered_df = pd.DataFrame()
 
-# Calculate filtered metrics
+# Calculate filtered metrics safely
 if not filtered_df.empty:
-    closed_df = filtered_df[filtered_df["Status"].isin(["Win 🎯", "Loss 🛡️"])]
     wins = len(filtered_df[filtered_df["Status"] == "Win 🎯"])
     losses = len(filtered_df[filtered_df["Status"] == "Loss 🛡️"])
     total_closed = wins + losses
@@ -173,7 +156,7 @@ with col4:
     avg_conv = f"{filtered_df['Conviction'].mean():.1f}%" if not filtered_df.empty else "N/A"
     st.metric("Avg Conviction", avg_conv)
 with col5:
-    last_time = filtered_df.iloc[-1]["Timestamp"] if not filtered_df.empty else "Waiting..."
+    last_time = filtered_df.iloc[-1]["Timestamp"] if not filtered_df.empty else "Waiting for signals..."
     st.metric("Last Scan", last_time)
 
 st.divider()
@@ -185,11 +168,9 @@ st.subheader("📈 Overall Performance Equity Curve (Cumulative Return Over Time
 if not filtered_df.empty:
     chart_data = filtered_df.sort_values(by="Timestamp").copy()
     chart_data["Cumulative Return (%)"] = chart_data["Return (%)"].cumsum()
-    
-    # Display line chart of cumulative performance
     st.line_chart(chart_data.set_index("Timestamp")["Cumulative Return (%)"])
 else:
-    st.info("ℹ️ No performance data available for the selected filters.")
+    st.info("ℹ️ No performance data available yet. Waiting for signals to be logged.")
 
 st.divider()
 
@@ -201,7 +182,7 @@ if not filtered_df.empty:
     display_cols = ["Timestamp", "Ticker", "Exchange / Category", "Entry Price", "Take Profit", "Stop Loss", "Conviction", "Status", "Return (%)"]
     st.dataframe(filtered_df[display_cols].sort_values(by="Timestamp", ascending=False), use_container_width=True, hide_index=True)
 else:
-    st.info("ℹ️ No signals match your filter criteria.")
+    st.info("ℹ️ No historical signals logged yet. Your backtest table will populate automatically once your bot logs a signal.")
 
 st.divider()
 
@@ -237,4 +218,4 @@ if not filtered_df.empty:
                 
         st.dataframe(pd.DataFrame(live_data), use_container_width=True, hide_index=True)
 else:
-    st.info("ℹ️ No active tickers to display.")
+    st.info("ℹ️ Real-time prices for triggered symbols will appear here once your bot logs a signal.")
