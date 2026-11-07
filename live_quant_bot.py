@@ -16,12 +16,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CSV_FILE = "backtest_signals.csv"
 
-# Strategy Parameters (Calibrated Sweet Spot & Volatility Scaling)
+# Strategy Parameters
 RSI_PERIOD = 14
-RSI_BUY_THRESHOLD = 35.0   # Balanced institutional dip-buying threshold
+RSI_BUY_THRESHOLD = 35.0   
 ATR_PERIOD = 14
-ATR_SL_MULTIPLIER = 1.5    # Stop loss distance in ATR units
-ATR_TP_MULTIPLIER = 3.0    # Take profit distance in ATR units (2:1 Reward/Risk)
+ATR_SL_MULTIPLIER = 1.5    
+ATR_TP_MULTIPLIER = 3.0    
 
 
 # ==========================================
@@ -118,6 +118,87 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+
+# ==========================================
+# POSITION EXIT MONITOR
+# ==========================================
+def check_open_position_exits():
+    """Checks active OPEN positions against current market price action for TP/SL hits and records exit prices."""
+    if not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0:
+        return
+        
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if 'Status' not in df.columns or df.empty:
+            return
+            
+        updated = False
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        for idx, row in df.iterrows():
+            if str(row['Status']).upper() == 'OPEN':
+                ticker = row['Ticker']
+                entry_price = float(row['Price'])
+                sl = float(row['Stop_Loss'])
+                tp = float(row['Take_Profit'])
+                
+                hist = yf.download(ticker, period="3d", interval="1d", progress=False, auto_adjust=True)
+                if hist.empty:
+                    continue
+                if isinstance(hist.columns, pd.MultiIndex):
+                    hist.columns = hist.columns.get_level_values(0)
+                    
+                latest = hist.iloc[-1]
+                day_high = float(latest['High'])
+                day_low = float(latest['Low'])
+                current_close = float(latest['Close'])
+                
+                # Check Take Profit Hit
+                if day_high >= tp:
+                    exit_price = round(max(tp, current_close), 2)
+                    df.at[idx, 'Status'] = 'CLOSED (TP)'
+                    df.at[idx, 'Exit_Price'] = exit_price
+                    df.at[idx, 'Exit_Date'] = today_str
+                    updated = True
+                    
+                    log(f"🎉 TAKE PROFIT HIT: {ticker} (Entry: ${entry_price:.2f}) -> Exit Price: ${exit_price:.2f} (Target TP: ${tp:.2f})")
+                    
+                    alert_msg = (
+                        f"🎯 *TAKE PROFIT TARGET REACHED* 🎯\n\n"
+                        f"📌 *Ticker:* `{ticker}`\n"
+                        f"💵 *Entry Price:* `${entry_price:.2f}`\n"
+                        f"📈 *Exit Price:* `${exit_price:.2f}` (Target: `${tp:.2f}`)\n"
+                        f"⚡ *Action:* Close position on Questrade Edge Web!"
+                    )
+                    send_telegram_alert(alert_msg)
+                    
+                # Check Stop Loss Hit
+                elif day_low <= sl:
+                    exit_price = round(min(sl, current_close), 2)
+                    df.at[idx, 'Status'] = 'CLOSED (SL)'
+                    df.at[idx, 'Exit_Price'] = exit_price
+                    df.at[idx, 'Exit_Date'] = today_str
+                    updated = True
+                    
+                    log(f"🛑 STOP LOSS HIT: {ticker} (Entry: ${entry_price:.2f}) -> Exit Price: ${exit_price:.2f} (Target SL: ${sl:.2f})")
+                    
+                    alert_msg = (
+                        f"🛑 *STOP LOSS TRIGGERED* 🛑\n\n"
+                        f"📌 *Ticker:* `{ticker}`\n"
+                        f"💵 *Entry Price:* `${entry_price:.2f}`\n"
+                        f"📉 *Exit Price:* `${exit_price:.2f}` (Target SL: `${sl:.2f}`)\n"
+                        f"⚡ *Action:* Cut losses on Questrade Edge Web!"
+                    )
+                    send_telegram_alert(alert_msg)
+                    
+        if updated:
+            df.to_csv(CSV_FILE, index=False)
+            log("📋 CSV successfully updated with Exit_Price and Exit_Date for closed positions.")
+            
+    except Exception as e:
+        log(f"⚠️ Error checking open position exits: {e}")
+
+
 # ==========================================
 # MAIN QUANT BOT EXECUTION ENGINE
 # ==========================================
@@ -127,7 +208,10 @@ def run_quant_scanner():
     else:
         log("🚀 Market is OPEN. Initializing High-Speed Quant Scan...")
     
-    # Safe check: Load active/open tickers from CSV if file exists and is not empty
+    # 1. Monitor active open positions and log exit prices if targets hit
+    check_open_position_exits()
+
+    # 2. Reload active/open tickers from CSV after exit check
     open_tickers = set()
     if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
         try:
@@ -176,7 +260,6 @@ def run_quant_scanner():
             sma200 = float(latest['SMA200'])
             atr = float(latest['ATR'])
 
-            # Fallback ATR if NaN
             if np.isnan(atr) or atr <= 0:
                 atr = price * 0.02
 
@@ -184,7 +267,6 @@ def run_quant_scanner():
             trend_ok = price > sma200  
 
             if rsi_ok and trend_ok:
-                # Dynamic ATR-based risk management
                 sl_price = round(price - (ATR_SL_MULTIPLIER * atr), 2)
                 tp_price = round(price + (ATR_TP_MULTIPLIER * atr), 2)
                 timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
