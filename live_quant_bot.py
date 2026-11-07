@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CSV_FILE = "backtest_signals.csv"
+LOCAL_TZ = pytz.timezone("America/New_York")
 
 # Strategy Parameters
 RSI_PERIOD = 14
@@ -28,14 +29,13 @@ ATR_TP_MULTIPLIER = 3.0
 # HELPER FUNCTIONS
 # ==========================================
 def log(msg: str):
-    """Prints diagnostic logs with timestamp."""
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now_str}] {msg}")
+    """Prints diagnostic logs with localized Eastern timestamp."""
+    now_str = datetime.datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now_str} ET] {msg}")
 
 def is_market_open() -> bool:
     """Checks if US stock market is currently open (9:30 AM - 4:00 PM Eastern ET)."""
-    tz = pytz.timezone("America/New_York")
-    now = datetime.datetime.now(tz)
+    now = datetime.datetime.now(LOCAL_TZ)
     
     if now.weekday() >= 5:
         return False
@@ -133,7 +133,7 @@ def check_open_position_exits():
             return
             
         updated = False
-        today_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        today_str = datetime.datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
         
         for idx, row in df.iterrows():
             if str(row['Status']).upper() == 'OPEN':
@@ -269,7 +269,7 @@ def run_quant_scanner():
             if rsi_ok and trend_ok:
                 sl_price = round(price - (ATR_SL_MULTIPLIER * atr), 2)
                 tp_price = round(price + (ATR_TP_MULTIPLIER * atr), 2)
-                timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp_str = datetime.datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
                 log(f"🎯 BUY SIGNAL: {ticker} @ ${price:.2f} | RSI: {rsi:.1f} | ATR: ${atr:.2f} | TP: ${tp_price} | SL: ${sl_price}")
 
