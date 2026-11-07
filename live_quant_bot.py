@@ -3,7 +3,7 @@
 Dynamic Quant Sentinel - S&P 500 & Nasdaq-100 Scanner & Position Manager
 ========================================================================
 - Dynamically fetches full S&P 500 & Nasdaq-100 universes.
-- Uses a local CSV (`active_positions.csv`) for persistent state tracking.
+- Uses your local `backtest_signals.csv` for persistent state tracking.
 - Only loads and processes OPEN positions for active monitoring.
 - Scans for Buy signals (skipping open positions) & saves new entries to CSV.
 """
@@ -11,6 +11,7 @@ Dynamic Quant Sentinel - S&P 500 & Nasdaq-100 Scanner & Position Manager
 import os
 import sys
 import logging
+import io
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -31,13 +32,13 @@ logging.basicConfig(
 # Configuration & Credentials
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
-CSV_FILENAME = "active_positions.csv"
+CSV_FILENAME = "backtest_signals.csv"
 
 # ==========================================
-# 1. CSV STATE MANAGEMENT (OPEN ONLY FILTER)
+# 1. CSV STATE MANAGEMENT (backtest_signals.csv)
 # ==========================================
 def initialize_csv_if_missing():
-    """Ensures the CSV file exists with the proper schema."""
+    """Ensures backtest_signals.csv exists with the proper schema."""
     if not os.path.exists(CSV_FILENAME):
         df = pd.DataFrame(columns=[
             "ticker", "entry_date", "entry_price", 
@@ -46,38 +47,46 @@ def initialize_csv_if_missing():
         df.to_csv(CSV_FILENAME, index=False)
 
 def get_open_positions() -> pd.DataFrame:
-    """Loads the CSV and filters strictly for OPEN positions in memory."""
+    """Loads backtest_signals.csv and filters strictly for OPEN positions in memory."""
     initialize_csv_if_missing()
     df = pd.read_csv(CSV_FILENAME)
     if df.empty:
         return df
+    # Ensure status column exists if it's an older schema version of the file
+    if 'status' not in df.columns:
+        df['status'] = 'OPEN'
+        df.to_csv(CSV_FILENAME, index=False)
     return df[df['status'] == 'OPEN'].copy()
 
 def update_position_status(ticker: str, new_status: str):
-    """Updates a specific ticker's status (e.g., from OPEN to CLOSED) in the full CSV."""
+    """Updates a specific ticker's status (e.g., from OPEN to CLOSED) in backtest_signals.csv."""
     initialize_csv_if_missing()
     df = pd.read_csv(CSV_FILENAME)
     df.loc[df['ticker'] == ticker, 'status'] = new_status
     df.to_csv(CSV_FILENAME, index=False)
 
 def append_new_positions(new_rows: list):
-    """Appends newly triggered buy signals to the CSV file."""
+    """Appends newly triggered buy signals to backtest_signals.csv cleanly without warnings."""
     if not new_rows:
         return
     initialize_csv_if_missing()
     df_full = pd.read_csv(CSV_FILENAME)
     df_new = pd.DataFrame(new_rows)
-    df_combined = pd.concat([df_full, df_new], ignore_index=True)
+    
+    # Avoid concatenation warning if the existing dataframe is empty
+    if df_full.empty or df_full.dropna(how='all').empty:
+        df_combined = df_new
+    else:
+        df_combined = pd.concat([df_full, df_new], ignore_index=True)
+        
     df_combined.to_csv(CSV_FILENAME, index=False)
 
 # ==========================================
-# 2. DYNAMIC UNIVERSE RETRIEVAL (FIXED)
+# 2. DYNAMIC UNIVERSE RETRIEVAL
 # ==========================================
 def get_dynamic_universe() -> list:
     """Dynamically fetches all S&P 500 and Nasdaq-100 tickers from Wikipedia using a custom User-Agent."""
     tickers = set()
-    
-    # Custom header so Wikipedia doesn't block the request with a 403 error
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -88,7 +97,7 @@ def get_dynamic_universe() -> list:
         response = requests.get(sp_url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        sp_table = pd.read_html(response.text)[0]
+        sp_table = pd.read_html(io.StringIO(response.text))[0]
         sp_tickers = sp_table['Symbol'].tolist()
         tickers.update([t.replace('.', '-') for t in sp_tickers])
         logging.info(f"Loaded {len(sp_tickers)} S&P 500 tickers.")
@@ -101,7 +110,7 @@ def get_dynamic_universe() -> list:
         response = requests.get(ndx_url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        ndx_tables = pd.read_html(response.text)
+        ndx_tables = pd.read_html(io.StringIO(response.text))
         ndx_table = None
         for table in ndx_tables:
             if 'Ticker' in table.columns or 'Symbol' in table.columns:
@@ -151,7 +160,7 @@ def alert_buy_signal(ticker: str, entry_price: float, rsi: float, atr: float, tp
         f"• **Indicators:** RSI `{rsi:.1f}` | ATR `${atr:.2f}`\n"
         f"• **Take Profit Target:** `${tp_target:.2f}`\n"
         f"• **Stop Loss Target:** `${sl_target:.2f}`\n\n"
-        f"👉 *Action:* Review chart & execute Buy order in Questrade. *(Auto-logged as OPEN)*\n"
+        f"👉 *Action:* Review chart & execute Buy order in Questrade. *(Auto-logged as OPEN in backtest_signals.csv)*\n"
         f"⏱️ `{timestamp}`"
     )
     send_telegram_alert(message)
@@ -226,7 +235,7 @@ def main():
         
         if current_price >= tp_target and not row.get('alert_sent', False):
             alert_take_profit(ticker, current_price, tp_target, entry_price)
-            # Update status to CLOSED in the CSV file
+            # Update status to CLOSED in backtest_signals.csv
             update_position_status(ticker, 'CLOSED')
 
     # ------------------------------------------
@@ -273,7 +282,7 @@ def main():
                 "alert_sent": False
             })
 
-    # Append new OPEN buy signals to CSV
+    # Append new OPEN buy signals to backtest_signals.csv
     if new_rows:
         append_new_positions(new_rows)
         logging.info(f"Successfully added {len(new_rows)} new OPEN positions to {CSV_FILENAME}.")
