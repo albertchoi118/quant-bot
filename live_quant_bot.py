@@ -71,16 +71,24 @@ def append_new_positions(new_rows: list):
     df_combined.to_csv(CSV_FILENAME, index=False)
 
 # ==========================================
-# 2. DYNAMIC UNIVERSE RETRIEVAL
+# 2. DYNAMIC UNIVERSE RETRIEVAL (FIXED)
 # ==========================================
 def get_dynamic_universe() -> list:
-    """Dynamically fetches all S&P 500 and Nasdaq-100 tickers from Wikipedia."""
+    """Dynamically fetches all S&P 500 and Nasdaq-100 tickers from Wikipedia using a custom User-Agent."""
     tickers = set()
+    
+    # Custom header so Wikipedia doesn't block the request with a 403 error
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     
     # 1. Fetch S&P 500
     try:
         sp_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        sp_table = pd.read_html(sp_url)[0]
+        response = requests.get(sp_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        sp_table = pd.read_html(response.text)[0]
         sp_tickers = sp_table['Symbol'].tolist()
         tickers.update([t.replace('.', '-') for t in sp_tickers])
         logging.info(f"Loaded {len(sp_tickers)} S&P 500 tickers.")
@@ -90,7 +98,10 @@ def get_dynamic_universe() -> list:
     # 2. Fetch Nasdaq-100
     try:
         ndx_url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        ndx_tables = pd.read_html(ndx_url)
+        response = requests.get(ndx_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        ndx_tables = pd.read_html(response.text)
         ndx_table = None
         for table in ndx_tables:
             if 'Ticker' in table.columns or 'Symbol' in table.columns:
